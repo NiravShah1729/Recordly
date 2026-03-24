@@ -1,0 +1,173 @@
+// prisma/schema.prisma
+
+// ── Generator ─────────────────────────────────────────────────
+// This tells Prisma to generate a TypeScript client
+// After you define tables here, run "npx prisma generate"
+// and Prisma creates TypeScript types automatically
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ── Datasource ────────────────────────────────────────────────
+// Tells Prisma which database to connect to
+// It reads DATABASE_URL from your .env file
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ══════════════════════════════════════════════════════════════
+// ENUMS — These are fixed sets of allowed values
+// Like a dropdown with only specific options
+// ══════════════════════════════════════════════════════════════
+
+// A room can only ever be in one of these 3 states
+enum RoomStatus {
+  WAITING    // Created but session not started yet
+  LIVE       // Recording session is active
+  ENDED      // Session finished
+}
+
+// A recording goes through these stages after upload
+enum ProcessingStatus {
+  UPLOADING    // File is being uploaded to S3
+  PROCESSING   // FFmpeg is transcoding it
+  READY        // Done — available to watch
+  FAILED       // Something went wrong
+}
+
+// ══════════════════════════════════════════════════════════════
+// MODELS — These become PostgreSQL tables
+// Each field becomes a column
+// ══════════════════════════════════════════════════════════════
+
+model User {
+  // @id = primary key (every row needs a unique identifier)
+  // @default(cuid()) = auto-generate a random ID like "clx7abc123"
+  id            String    @id @default(cuid())
+  
+  name          String?   // The ? means this field can be null
+  
+  // @unique = no two users can have the same email
+  email         String    @unique
+  
+  emailVerified DateTime?
+  image         String?
+  
+  // @default(now()) = automatically set to current timestamp on create
+  createdAt     DateTime  @default(now())
+  
+  // @updatedAt = automatically updated whenever this row changes
+  updatedAt     DateTime  @updatedAt
+
+  // ── Relations ─────────────────────────────────────────────
+  // These are NOT real database columns
+  // They're virtual — Prisma uses them to let you do:
+  //   user.rooms         → get all rooms this user hosts
+  //   user.recordings    → get all recordings this user made
+  
+  accounts   Account[]             // one user → many accounts (OAuth)
+  sessions   Session[]             // one user → many sessions
+  rooms      Room[]    @relation("HostRooms")
+  recordings Recording[]
+}
+
+// Account and Session are required by NextAuth
+// You don't interact with these directly — NextAuth manages them
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String          // "google", "github", etc.
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  // @relation = this is a foreign key
+  // fields: [userId] = the column in THIS table
+  // references: [id] = the column in the OTHER table
+  // onDelete: Cascade = if User is deleted, delete their Accounts too
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Room {
+  id          String     @id @default(cuid())
+  name        String
+  description String?
+  hostId      String     // Foreign key → points to a User.id
+  
+  // This is the shareable invite link code
+  // @default(cuid()) auto-generates something like "clx7abc123"
+  inviteCode  String     @unique @default(cuid())
+  
+  status      RoomStatus @default(WAITING)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  endedAt     DateTime?  // null until the session ends
+
+  // Relations
+  // This creates the hostId → User.id foreign key
+  host       User        @relation("HostRooms", fields: [hostId], references: [id])
+  recordings Recording[]
+}
+
+model Recording {
+  id       String @id @default(cuid())
+  roomId   String? // which room this recording belongs to
+  userId   String // who recorded it
+  
+  fileName String
+  s3Key    String // the path inside S3 bucket, e.g. "raw/roomId/userId/abc.webm"
+  cdnUrl   String? // the CloudFront URL once processed
+  
+  duration  Int?    // length in seconds
+  fileSize  BigInt? // bytes — BigInt because files can be huge
+  mimeType  String  @default("video/webm")
+  
+  status    ProcessingStatus @default(UPLOADING)
+  thumbnail String?          // CDN URL to the thumbnail image
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  room     Room?           @relation(fields: [roomId], references: [id])
+  user     User           @relation(fields: [userId], references: [id])
+  qualities VideoQuality[] // the different quality versions of this recording
+}
+
+// Each recording gets transcoded into multiple quality tiers
+// This table stores one row per quality (1080p, 720p, 480p, 360p)
+model VideoQuality {
+  id          String @id @default(cuid())
+  recordingId String
+  
+  label   String // "1080p", "720p", "480p", "360p"
+  width   Int    // pixel width,  e.g. 1920
+  height  Int    // pixel height, e.g. 1080
+  bitrate Int    // video bitrate in kbps
+  
+  s3Key   String  // where the MP4 lives in S3
+  cdnUrl  String? // CloudFront URL for direct MP4 download
+  hlsUrl  String? // CloudFront URL for HLS streaming playlist
+  
+  fileSize BigInt?
+  createdAt DateTime @default(now())
+
+  recording Recording @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+}
