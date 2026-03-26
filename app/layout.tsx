@@ -1,11 +1,11 @@
-// src/app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
-import { Providers } from "./providers";
+import Navbar from "@/components/Navbar";
+import { SessionProvider } from "@/components/SessionProvider";
 
 export const metadata: Metadata = {
   title: "Recordly",
-  description: "Record studio-quality video remotely.",
+  description: "Record and share your screen and camera",
 };
 
 export default function RootLayout({
@@ -16,9 +16,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <Providers>
+        <SessionProvider>
+          <Navbar />
           {children}
-        </Providers>
+        </SessionProvider>
       </body>
     </html>
   );

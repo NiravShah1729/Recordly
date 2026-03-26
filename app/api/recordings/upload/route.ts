@@ -1,8 +1,30 @@
-import { writeFile } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
 
 export async function POST(req: NextRequest) {
+  // Get the logged in user
+  const session = await getServerSession(authOptions);
+
+  if (!session || !session.user?.email) {
+    return NextResponse.json({ error: "Not logged in" }, { status: 401 });
+  }
+
+  // Find the user in the database by email
+  const user = await prisma.user.findUnique({
+    where: { email: session.user.email },
+  });
+
+  if (!user) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  // Save the file
   const formData = await req.formData();
   const file = formData.get("file") as File;
 
@@ -14,9 +36,22 @@ export async function POST(req: NextRequest) {
   const buffer = Buffer.from(bytes);
 
   const filename = `recording-${Date.now()}.webm`;
-  const filepath = path.join(process.cwd(), "public", "recordings", filename);
+  const folderPath = path.join(process.cwd(), "public", "recordings");
+  const filepath = path.join(folderPath, filename);
 
+  await mkdir(folderPath, { recursive: true });
   await writeFile(filepath, buffer);
 
-  return NextResponse.json({ success: true, filename });
+  // Save recording info to database
+  const recording = await prisma.recording.create({
+    data: {
+      userId: user.id,
+      fileName: filename,
+      s3Key: `local/recordings/${filename}`,
+      mimeType: "video/webm",
+      status: "READY",
+    },
+  });
+
+  return NextResponse.json({ success: true, filename, recordingId: recording.id });
 }
