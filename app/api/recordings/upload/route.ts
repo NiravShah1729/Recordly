@@ -27,9 +27,18 @@ export async function POST(req: NextRequest) {
   // Save the file
   const formData = await req.formData();
   const file = formData.get("file") as File;
+  const roomId = formData.get("roomId") as string | null;
 
   if (!file) {
     return NextResponse.json({ error: "No file received" }, { status: 400 });
+  }
+
+  // Validate roomId if provided
+  if (roomId) {
+    const room = await prisma.room.findUnique({ where: { id: roomId } });
+    if (!room) {
+      return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    }
   }
 
   const bytes = await file.arrayBuffer();
@@ -46,6 +55,7 @@ export async function POST(req: NextRequest) {
   const recording = await prisma.recording.create({
     data: {
       userId: user.id,
+      roomId: roomId || undefined,
       fileName: filename,
       s3Key: `local/recordings/${filename}`,
       mimeType: "video/webm",

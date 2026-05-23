@@ -50,7 +50,7 @@ export default function Navbar() {
         </div>
       ) : (
         <Link
-          href="/"
+          href="/signin"
           className="text-gray-300 hover:text-white text-sm"
         >
           Sign In

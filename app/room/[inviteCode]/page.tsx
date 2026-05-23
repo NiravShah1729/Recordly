@@ -21,7 +21,13 @@ export default async function RoomPage({ params }: Props) {
 
   const room = await prisma.room.findUnique({
     where: { inviteCode },
-    include: { host: true },
+    include: {
+      host: true,
+      recordings: {
+        include: { user: true },
+        orderBy: { createdAt: "desc" },
+      },
+    },
   });
 
   if (!room) {
@@ -78,13 +84,61 @@ export default async function RoomPage({ params }: Props) {
         )}
       </div>
 
-      {/* Record button */}
+      {/* Record button — passes roomId as query param */}
       <Link
-        href="/record"
+        href={`/record?roomId=${room.id}`}
         className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold inline-block"
       >
         ⏺ Start Recording
       </Link>
+
+      {/* Recordings Section */}
+      <div className="mt-12">
+        <h2 className="text-2xl font-bold mb-6">
+          📹 Recordings ({room.recordings.length})
+        </h2>
+
+        {room.recordings.length === 0 ? (
+          <p className="text-gray-500">No recordings yet. Be the first to record!</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {room.recordings.map((recording) => (
+              <div
+                key={recording.id}
+                className="bg-gray-800 rounded-xl p-4 flex flex-col gap-3"
+              >
+                {/* Video Player */}
+                <video
+                  src={`/recordings/${recording.fileName}`}
+                  controls
+                  className="w-full rounded-lg border border-gray-700"
+                />
+
+                {/* Info */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold">
+                      {recording.user.name || recording.user.email}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {new Date(recording.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+
+                  {/* Download Button */}
+                  <a
+                    href={`/recordings/${recording.fileName}`}
+                    download={recording.fileName}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+                  >
+                    ⬇ Download
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

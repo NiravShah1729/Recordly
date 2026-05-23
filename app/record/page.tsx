@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
-export default function RecordPage() {
+function RecordPageInner() {
+  const searchParams = useSearchParams();
+  const roomId = searchParams.get("roomId");
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -73,6 +76,9 @@ export default function RecordPage() {
 
     const formData = new FormData();
     formData.append("file", blob, "recording.webm");
+    if (roomId) {
+      formData.append("roomId", roomId);
+    }
 
     const res = await fetch("/api/recordings/upload", {
       method: "POST",
@@ -154,5 +160,13 @@ export default function RecordPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function RecordPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">Loading...</div>}>
+      <RecordPageInner />
+    </Suspense>
   );
 }
