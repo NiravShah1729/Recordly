@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import Link from "next/link";
 import CopyButton from "@/components/CopyButton/index";
+import { useRouter } from "next/navigation";
 
 // ── Types ──────────────────────────────────────────────────────
 type RecordingData = {
@@ -47,9 +48,11 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   const localStreamRef = useRef<MediaStream | null>(null);
 
   // State
+  const router = useRouter();
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("waiting");
   const [mediaError, setMediaError] = useState("");
   const [remoteSocketId, setRemoteSocketId] = useState<string | null>(null);
+  const [currentRoomStatus, setCurrentRoomStatus] = useState(room.status);
 
   // ── ICE Servers (STUN for NAT traversal) ─────────────────
   const iceServers = {
@@ -250,6 +253,35 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     };
   }, [room.id, createPeerConnection]);
 
+  // ── Auto-LIVE on connect ─────────────────────────────────
+  useEffect(() => {
+    if (isHost && connectionStatus === "connected" && currentRoomStatus === "WAITING") {
+      setCurrentRoomStatus("LIVE");
+      fetch(`/api/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "LIVE" }),
+      }).catch(err => console.error("Error setting room LIVE:", err));
+    }
+  }, [isHost, connectionStatus, currentRoomStatus, room.id]);
+
+  // ── End Session ─────────────────────────────────────────
+  const handleEndSession = async () => {
+    if (!confirm("Are you sure you want to end this session?")) return;
+    
+    try {
+      setCurrentRoomStatus("ENDED");
+      await fetch(`/api/rooms/${room.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "ENDED" }),
+      });
+      router.push("/dashboard");
+    } catch (err) {
+      console.error("Error ending session:", err);
+    }
+  };
+
   // ── Status indicator config ───────────────────────────────
   const statusConfig = {
     waiting: { label: "Waiting for peer...", color: "bg-yellow-500", icon: "🟡" },
@@ -271,8 +303,12 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
           Host: {room.host.name || room.host.email}
         </p>
         <div className="flex items-center gap-3 mt-2">
-          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-700 text-green-200">
-            {room.status}
+          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+            currentRoomStatus === 'LIVE' ? 'bg-green-700 text-green-200' :
+            currentRoomStatus === 'ENDED' ? 'bg-gray-700 text-gray-200' :
+            'bg-yellow-700 text-yellow-200'
+          }`}>
+            {currentRoomStatus}
           </span>
           {/* Role badge */}
           {isHost ? (
@@ -353,13 +389,24 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         </div>
       )}
 
-      {/* Record button */}
-      <Link
-        href={`/record?roomId=${room.id}`}
-        className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold inline-block"
-      >
-        ⏺ Start Recording
-      </Link>
+      {/* Action Buttons */}
+      <div className="flex items-center gap-4">
+        <Link
+          href={`/record?roomId=${room.id}`}
+          className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold inline-block"
+        >
+          ⏺ Start Recording
+        </Link>
+        
+        {isHost && (
+          <button
+            onClick={handleEndSession}
+            className="bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-semibold inline-block transition-colors"
+          >
+            🛑 End Session
+          </button>
+        )}
+      </div>
 
       {/* Recordings Section */}
       <div className="mt-12">

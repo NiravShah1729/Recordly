@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { PrismaClient } from "@prisma/client";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import RoomClient from "./RoomClient";
 
 const prisma = new PrismaClient();
@@ -38,6 +39,23 @@ export default async function RoomPage({ params }: Props) {
   }
 
   const isHost = session.user.email === room.host.email;
+
+  if (room.status === "ENDED") {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-8 text-center">
+        <h1 className="text-4xl font-bold mb-4">Session Ended</h1>
+        <p className="text-gray-400 mb-8 max-w-md">
+          This recording session has concluded. You can no longer join the room.
+        </p>
+        <Link 
+          href="/dashboard"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold"
+        >
+          Return to Dashboard
+        </Link>
+      </div>
+    );
+  }
 
   // Serialize data for the client component (dates → strings, BigInt → string)
   const serializedRoom = {
