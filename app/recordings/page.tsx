@@ -35,7 +35,7 @@ export default async function RecordingsPage() {
               className="bg-gray-800 rounded-xl p-4 flex flex-col gap-3"
             >
               <video
-                src={`/recordings/${recording.fileName}`}
+                src={recording.cdnUrl || `/recordings/${recording.fileName}`}
                 controls
                 className="w-full rounded-lg"
               />
@@ -43,11 +43,13 @@ export default async function RecordingsPage() {
                 {new Date(recording.createdAt).toLocaleString()}
               </p>
               <a
-                href={`/recordings/${recording.fileName}`}
-                download
+                href={recording.cdnUrl || `/recordings/${recording.fileName}`}
+                download={recording.fileName}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="bg-blue-600 hover:bg-blue-700 text-white text-center px-4 py-2 rounded-lg text-sm font-semibold"
               >
-                ⬇ Download
+                ⬇ Download / View
               </a>
             </div>
           ))}

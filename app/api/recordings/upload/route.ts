@@ -1,9 +1,9 @@
-import { writeFile, mkdir } from "fs/promises";
 import { NextRequest, NextResponse } from "next/server";
-import path from "path";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { PrismaClient } from "@prisma/client";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { s3Client } from "@/lib/s3";
 
 const prisma = new PrismaClient();
 
@@ -45,23 +45,41 @@ export async function POST(req: NextRequest) {
   const buffer = Buffer.from(bytes);
 
   const filename = `recording-${Date.now()}.webm`;
-  const folderPath = path.join(process.cwd(), "public", "recordings");
-  const filepath = path.join(folderPath, filename);
+  const s3Key = `raw/${user.id}/${filename}`;
+  const bucketName = process.env.AWS_S3_BUCKET_NAME;
 
-  await mkdir(folderPath, { recursive: true });
-  await writeFile(filepath, buffer);
+  if (!bucketName) {
+    return NextResponse.json({ error: "S3 Bucket not configured" }, { status: 500 });
+  }
 
-  // Save recording info to database
-  const recording = await prisma.recording.create({
-    data: {
-      userId: user.id,
-      roomId: roomId || undefined,
-      fileName: filename,
-      s3Key: `local/recordings/${filename}`,
-      mimeType: "video/webm",
-      status: "READY",
-    },
-  });
+  try {
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: s3Key,
+      Body: buffer,
+      ContentType: "video/webm",
+    });
 
-  return NextResponse.json({ success: true, filename, recordingId: recording.id });
+    await s3Client.send(command);
+
+    const cdnUrl = `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
+
+    // Save recording info to database
+    const recording = await prisma.recording.create({
+      data: {
+        userId: user.id,
+        roomId: roomId || undefined,
+        fileName: filename,
+        s3Key: s3Key,
+        cdnUrl: cdnUrl,
+        mimeType: "video/webm",
+        status: "READY",
+      },
+    });
+
+    return NextResponse.json({ success: true, filename, recordingId: recording.id, cdnUrl });
+  } catch (error) {
+    console.error("Error uploading to S3:", error);
+    return NextResponse.json({ error: "Failed to upload to S3" }, { status: 500 });
+  }
 }

@@ -71,6 +71,7 @@ export default async function RoomPage({ params }: Props) {
     recordings: room.recordings.map((r) => ({
       id: r.id,
       fileName: r.fileName,
+      cdnUrl: r.cdnUrl,
       createdAt: r.createdAt.toISOString(),
       user: {
         name: r.user.name,
