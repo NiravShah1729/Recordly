@@ -456,3 +456,4 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     </div>
   );
 }
+

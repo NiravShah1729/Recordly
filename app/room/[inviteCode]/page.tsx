@@ -1,11 +1,9 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import RoomClient from "./RoomClient";
-
-const prisma = new PrismaClient();
 
 interface Props {
   params: Promise<{ inviteCode: string }>;
