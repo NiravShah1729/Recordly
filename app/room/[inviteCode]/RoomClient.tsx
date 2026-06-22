@@ -47,6 +47,11 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const animationFrameIdRef = useRef<number | null>(null);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // State
   const router = useRouter();
@@ -54,6 +59,11 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   const [mediaError, setMediaError] = useState("");
   const [remoteSocketId, setRemoteSocketId] = useState<string | null>(null);
   const [currentRoomStatus, setCurrentRoomStatus] = useState(room.status);
+  
+  // Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
 
   // ── ICE Servers (STUN for NAT traversal) ─────────────────
   const iceServers = {
@@ -84,6 +94,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     pc.ontrack = (event) => {
       if (remoteVideoRef.current && event.streams[0]) {
         remoteVideoRef.current.srcObject = event.streams[0];
+        remoteStreamRef.current = event.streams[0];
       }
     };
 
@@ -121,6 +132,11 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     async function init() {
       // 1. Get local media stream
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setMediaError("Media devices API not available (requires HTTPS or localhost). Please use ngrok or enable Chrome's insecure origins flag.");
+          return;
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
@@ -135,9 +151,9 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Media error:", err);
-        setMediaError("Could not access camera/microphone. Please allow permissions.");
+        setMediaError(err.message || "Could not access camera/microphone. Please allow permissions.");
         return;
       }
 
@@ -242,6 +258,13 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         localStreamRef.current.getTracks().forEach((track) => track.stop());
       }
 
+      // Cleanup recording resources
+      if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+
       // Close peer connection
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
@@ -281,6 +304,120 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     } catch (err) {
       console.error("Error ending session:", err);
     }
+  };
+
+  // ── Recording Methods ───────────────────────────────────
+  const startRecording = async () => {
+    if (!localStreamRef.current || !remoteStreamRef.current) {
+      alert("Cannot start recording until both peers are connected.");
+      return;
+    }
+
+    try {
+      // 1. Audio mixing
+      const audioCtx = new window.AudioContext();
+      const dest = audioCtx.createMediaStreamDestination();
+      audioCtx.createMediaStreamSource(localStreamRef.current).connect(dest);
+      audioCtx.createMediaStreamSource(remoteStreamRef.current).connect(dest);
+
+      // 2. Canvas drawing
+      const canvas = document.createElement("canvas");
+      canvas.width = 1280;
+      canvas.height = 360;
+      const ctx = canvas.getContext("2d")!;
+
+      const drawFrame = () => {
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        if (localVideoRef.current) {
+          ctx.drawImage(localVideoRef.current, 0, 0, 640, 360);
+        }
+        if (remoteVideoRef.current) {
+          ctx.drawImage(remoteVideoRef.current, 640, 0, 640, 360);
+        }
+        animationFrameIdRef.current = requestAnimationFrame(drawFrame);
+      };
+      drawFrame();
+
+      // 3. Create MediaRecorder
+      const canvasStream = canvas.captureStream(30);
+      const combinedTracks = [
+        ...canvasStream.getVideoTracks(),
+        ...dest.stream.getAudioTracks(),
+      ];
+      const combinedStream = new MediaStream(combinedTracks);
+
+      const recorder = new MediaRecorder(combinedStream, { mimeType: "video/webm" });
+      mediaRecorderRef.current = recorder;
+      recordedChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
+        recordedChunksRef.current = [];
+        
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append("file", blob, "recording.webm");
+        formData.append("roomId", room.id);
+
+        try {
+          const res = await fetch("/api/recordings/upload", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await res.json();
+          if (data.success) {
+            router.refresh(); // Refresh to show new recording
+          } else {
+            console.error("Upload failed:", data.error);
+            alert("Upload failed.");
+          }
+        } catch (err) {
+          console.error("Server error:", err);
+          alert("Server error uploading recording.");
+        } finally {
+          setIsUploading(false);
+        }
+      };
+
+      recorder.start(1000);
+      setIsRecording(true);
+      setRecordingTime(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+
+    } catch (err) {
+      console.error("Error starting recording:", err);
+      alert("Error starting recording. Ensure your browser allows AudioContext.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+    }
+    if (animationFrameIdRef.current) {
+      cancelAnimationFrame(animationFrameIdRef.current);
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+    }
+    setIsRecording(false);
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
   };
 
   // ── Status indicator config ───────────────────────────────
@@ -392,12 +529,39 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
 
       {/* Action Buttons */}
       <div className="flex items-center gap-4">
-        <Link
-          href={`/record?roomId=${room.id}`}
-          className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold inline-block"
-        >
-          ⏺ Start Recording
-        </Link>
+        {isHost && connectionStatus === "connected" && !isRecording && !isUploading && (
+          <button
+            onClick={startRecording}
+            className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2"
+          >
+            ⏺ Start Recording
+          </button>
+        )}
+
+        {isHost && isRecording && (
+          <div className="flex items-center gap-4 bg-red-900/40 border border-red-700 rounded-lg px-4 py-2">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+              <span className="font-mono text-red-100">{formatTime(recordingTime)}</span>
+            </div>
+            <button
+              onClick={stopRecording}
+              className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+            >
+              ⏹ Stop
+            </button>
+          </div>
+        )}
+
+        {isHost && isUploading && (
+          <div className="flex items-center gap-3 bg-blue-900/40 border border-blue-700 rounded-lg px-6 py-3">
+            <svg className="animate-spin h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span className="text-blue-100 font-medium">Uploading to S3...</span>
+          </div>
+        )}
         
         {isHost && (
           <button

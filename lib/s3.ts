@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 if (!process.env.AWS_REGION || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
   console.warn("AWS credentials are not properly set in the environment variables!");
@@ -34,4 +35,20 @@ export async function uploadFileToS3(fileBuffer: Buffer, fileName: string, conte
     console.error("Error uploading file to S3:", error);
     throw error;
   }
+}
+
+/**
+ * Generates a presigned URL for viewing/downloading an object
+ */
+export async function getPresignedUrl(key: string, expiresIn = 3600) {
+  if (!process.env.AWS_S3_BUCKET_NAME) {
+    throw new Error("AWS_S3_BUCKET_NAME is not defined in the environment variables.");
+  }
+  
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_S3_BUCKET_NAME,
+    Key: key,
+  });
+  
+  return getSignedUrl(s3Client, command, { expiresIn });
 }

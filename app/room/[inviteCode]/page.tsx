@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import RoomClient from "./RoomClient";
+import { getPresignedUrl } from "@/lib/s3";
 
 interface Props {
   params: Promise<{ inviteCode: string }>;
@@ -56,6 +57,29 @@ export default async function RoomPage({ params }: Props) {
   }
 
   // Serialize data for the client component (dates → strings, BigInt → string)
+  const serializedRecordings = await Promise.all(
+    room.recordings.map(async (r) => {
+      let presignedUrl = null;
+      try {
+        if (r.s3Key) {
+          presignedUrl = await getPresignedUrl(r.s3Key);
+        }
+      } catch (error) {
+        console.error("Failed to generate presigned URL for", r.id, error);
+      }
+      return {
+        id: r.id,
+        fileName: r.fileName,
+        cdnUrl: presignedUrl || r.cdnUrl,
+        createdAt: r.createdAt.toISOString(),
+        user: {
+          name: r.user.name,
+          email: r.user.email,
+        },
+      };
+    })
+  );
+
   const serializedRoom = {
     id: room.id,
     name: room.name,
@@ -66,16 +90,7 @@ export default async function RoomPage({ params }: Props) {
       name: room.host.name,
       email: room.host.email,
     },
-    recordings: room.recordings.map((r) => ({
-      id: r.id,
-      fileName: r.fileName,
-      cdnUrl: r.cdnUrl,
-      createdAt: r.createdAt.toISOString(),
-      user: {
-        name: r.user.name,
-        email: r.user.email,
-      },
-    })),
+    recordings: serializedRecordings,
   };
 
   return (

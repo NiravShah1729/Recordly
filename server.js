@@ -1,20 +1,41 @@
-import { createServer } from "http";
+import { createServer as createHttpServer } from "http";
+import { createServer as createHttpsServer } from "https";
+import { generate } from "selfsigned";
 import next from "next";
 import { Server as SocketServer } from "socket.io";
+import { networkInterfaces } from "os";
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
-const app = next({ dev });
+const app = next({ dev, hostname: "0.0.0.0", port });
 const handle = app.getRequestHandler();
 
-app.prepare().then(() => {
-  const httpServer = createServer((req, res) => {
-    handle(req, res);
-  });
+app.prepare().then(async () => {
+  let serverOptions = {};
+  let isHttps = false;
+
+  if (dev) {
+    try {
+      console.log("> Generating self-signed certificate for local HTTPS...");
+      const pems = await generate([{ name: 'commonName', value: 'localhost' }], { days: 365, keySize: 2048 });
+      serverOptions = {
+        key: pems.private,
+        cert: pems.cert
+      };
+      isHttps = true;
+    } catch (err) {
+      console.error("> Failed to generate self-signed cert, falling back to HTTP:", err);
+    }
+  }
+
+  const httpServer = isHttps 
+    ? createHttpsServer(serverOptions, (req, res) => handle(req, res))
+    : createHttpServer((req, res) => handle(req, res));
 
   // ── Socket.io Setup ──────────────────────────────────────────
   const io = new SocketServer(httpServer, {
     cors: { origin: "*" },
+    destroyUpgrade: false,
   });
 
   // Track which users are in which rooms
@@ -90,7 +111,35 @@ app.prepare().then(() => {
     });
   });
 
-  httpServer.listen(port, () => {
-    console.log(`> Server listening at http://localhost:${port} as ${dev ? "development" : process.env.NODE_ENV}`);
+  httpServer.on("upgrade", (req, socket, head) => {
+    if (req.url && req.url.startsWith("/_next/")) {
+      app.getUpgradeHandler()(req, socket, head);
+    }
+  });
+
+  httpServer.listen(port, "0.0.0.0", () => {
+    const protocol = isHttps ? "https" : "http";
+    console.log(`> Server listening at ${protocol}://localhost:${port} as ${dev ? "development" : process.env.NODE_ENV}`);
+    
+    // Print the local network IP address
+    const nets = networkInterfaces();
+    let networkIp = "";
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
+        if (net.family === "IPv4" && !net.internal) {
+          networkIp = net.address;
+          break;
+        }
+      }
+      if (networkIp) break;
+    }
+    
+    if (networkIp) {
+      console.log(`> Network link available at ${protocol}://${networkIp}:${port}`);
+      if (isHttps) {
+        console.log(`> NOTE: You will see a "Your connection is not private" warning in your browser. Click 'Advanced' -> 'Proceed' to bypass it.`);
+      }
+    }
   });
 });
