@@ -140,7 +140,7 @@ model Recording {
   mimeType  String  @default("video/webm")
   
   status    ProcessingStatus @default(UPLOADING)
-  thumbnail String?          // CDN URL to the thumbnail image
+  thumbnailUrl String?          // CDN URL to the thumbnail image
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

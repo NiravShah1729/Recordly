@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
 
     const cdnUrl = `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
-    // Save recording info to database
+    // Save recording info to database (initially UPLOADING)
     const recording = await prisma.recording.create({
       data: {
         userId: user.id,
@@ -71,8 +71,15 @@ export async function POST(req: NextRequest) {
         s3Key: s3Key,
         cdnUrl: cdnUrl,
         mimeType: "video/webm",
-        status: "READY",
+        status: "UPLOADING",
       },
+    });
+
+    // Fire and forget background processing
+    import("@/lib/processRecording").then(({ processRecording }) => {
+      processRecording(recording.id).catch((err) => {
+        console.error("Background processing failed:", err);
+      });
     });
 
     return NextResponse.json({ success: true, filename, recordingId: recording.id, cdnUrl });
