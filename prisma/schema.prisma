@@ -70,6 +70,7 @@ model User {
   sessions   Session[]             // one user → many sessions
   rooms      Room[]    @relation("HostRooms")
   recordings Recording[]
+  participatedRooms Room[] @relation("RoomParticipants")
 }
 
 // Account and Session are required by NextAuth
@@ -124,6 +125,7 @@ model Room {
   // This creates the hostId → User.id foreign key
   host       User        @relation("HostRooms", fields: [hostId], references: [id])
   recordings Recording[]
+  participants User[]    @relation("RoomParticipants")
 }
 
 model Recording {

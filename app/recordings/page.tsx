@@ -16,8 +16,18 @@ export default async function RecordingsPage() {
     where: { email: session.user.email },
   });
 
+  if (!user) {
+    redirect("/");
+  }
+
   const recordings = await prisma.recording.findMany({
-    where: { userId: user?.id },
+    where: {
+      OR: [
+        { userId: user.id },
+        { room: { participants: { some: { id: user.id } } } },
+        { room: { hostId: user.id } }
+      ]
+    },
     orderBy: { createdAt: "desc" },
   });
 

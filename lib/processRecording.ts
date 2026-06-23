@@ -51,8 +51,12 @@ export async function processRecording(recordingId: string) {
     let duration = 0;
     await new Promise<void>((resolve, reject) => {
       ffmpeg.ffprobe(rawPath, (err, metadata) => {
-        if (err) return reject(err);
-        duration = Math.floor(metadata.format.duration || 0);
+        if (err) {
+          console.warn("[FFmpeg] ffprobe error, defaulting duration to 0:", err);
+          return resolve();
+        }
+        const parsedDuration = Number(metadata?.format?.duration);
+        duration = isNaN(parsedDuration) ? 0 : Math.floor(parsedDuration);
         resolve();
       });
     });
@@ -71,11 +75,12 @@ export async function processRecording(recordingId: string) {
 
     // 5. Extract Thumbnail
     console.log("[FFmpeg] Extracting thumbnail...");
+    const thumbTimestamp = duration > 1 ? 1 : 0;
     await new Promise<void>((resolve, reject) => {
       ffmpeg(rawPath)
         .screenshots({
           count: 1,
-          timestamps: [Math.min(1, duration)],
+          timestamps: [thumbTimestamp],
           folder: tempDir,
           filename: thumbName,
         })

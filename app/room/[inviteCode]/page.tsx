@@ -39,6 +39,22 @@ export default async function RoomPage({ params }: Props) {
 
   const isHost = session.user.email === room.host.email;
 
+  if (!isHost) {
+    const currentUser = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+    if (currentUser) {
+      await prisma.room.update({
+        where: { id: room.id },
+        data: {
+          participants: {
+            connect: { id: currentUser.id },
+          },
+        },
+      });
+    }
+  }
+
   if (room.status === "ENDED") {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-8 text-center">
