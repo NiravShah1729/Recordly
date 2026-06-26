@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("file") as File;
   const roomId = formData.get("roomId") as string | null;
+  const startTimeStr = formData.get("startTime") as string | null;
 
   if (!file) {
     return NextResponse.json({ error: "No file received" }, { status: 400 });
@@ -62,7 +63,11 @@ export async function POST(req: NextRequest) {
 
     const cdnUrl = `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
-    // Save recording info to database (initially UPLOADING)
+    // Parse startTime: it's a Unix timestamp in milliseconds (e.g. 1719312000000)
+    // Convert to a Date object for Prisma, or null if not provided
+    const startTime = startTimeStr ? new Date(parseInt(startTimeStr, 10)) : null;
+
+    // Save recording info to database
     const recording = await prisma.recording.create({
       data: {
         userId: user.id,
@@ -72,6 +77,8 @@ export async function POST(req: NextRequest) {
         cdnUrl: cdnUrl,
         mimeType: "video/webm",
         status: "UPLOADING",
+        // Save the shared start time so we can use it for FFmpeg sync later
+        startTime: startTime,
       },
     });
 

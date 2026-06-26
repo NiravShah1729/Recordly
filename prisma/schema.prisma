@@ -142,6 +142,7 @@ model Recording {
   mimeType  String  @default("video/webm")
   
   status    ProcessingStatus @default(UPLOADING)
+  startTime DateTime?                   // shared start timestamp for FFmpeg sync
   thumbnailUrl String?          // CDN URL to the thumbnail image
   
   createdAt DateTime @default(now())

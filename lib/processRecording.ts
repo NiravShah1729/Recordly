@@ -71,7 +71,7 @@ export async function processRecording(recordingId: string) {
         .on("end", () => resolve())
         .on("error", (err) => reject(err))
         .run();
-    });
+    })
 
     // 5. Extract Thumbnail
     console.log("[FFmpeg] Extracting thumbnail...");

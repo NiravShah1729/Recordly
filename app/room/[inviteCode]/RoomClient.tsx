@@ -48,10 +48,17 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+
+  // ── Recording refs ──────────────────────────────────────────
+  // MediaRecorder records the local camera+mic stream
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // Chunks of recorded data collected every 1 second
   const recordedChunksRef = useRef<Blob[]>([]);
-  const animationFrameIdRef = useRef<number | null>(null);
+  // Timer interval that ticks the on-screen counter
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // The shared start timestamp — same value on both host and guest
+  // so we can later align the recordings with FFmpeg
+  const sharedStartTimeRef = useRef<number | null>(null);
 
   // State
   const router = useRouter();
@@ -59,11 +66,14 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   const [mediaError, setMediaError] = useState("");
   const [remoteSocketId, setRemoteSocketId] = useState<string | null>(null);
   const [currentRoomStatus, setCurrentRoomStatus] = useState(room.status);
-  
+
   // Recording State
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  // Upload state — shown while the file is being sent to S3
   const [isUploading, setIsUploading] = useState(false);
+  // Brief "Upload complete" message
+  const [uploadComplete, setUploadComplete] = useState(false);
 
   // ── ICE Servers (STUN for NAT traversal) ─────────────────
   const iceServers = {
@@ -123,6 +133,112 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     };
 
     return pc;
+  }, []);
+
+  // ──────────────────────────────────────────────────────────
+  // startLocalRecording — records THIS browser's localStream
+  // Called on BOTH host and guest when the "start-recording"
+  // socket event fires. The sharedStartTime is passed in so
+  // both sides store the same timestamp.
+  // ──────────────────────────────────────────────────────────
+  const startLocalRecording = useCallback((sharedStartTime: number) => {
+    // Safety: need a local camera/mic stream to record
+    if (!localStreamRef.current) {
+      console.warn("[Recording] No local stream available to record.");
+      return;
+    }
+
+    // Store the shared start time so we can include it in the upload
+    sharedStartTimeRef.current = sharedStartTime;
+
+    // Pick the best codec the browser supports
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : "video/webm";
+
+    // Create a MediaRecorder that records only OUR local camera+mic
+    const recorder = new MediaRecorder(localStreamRef.current, { mimeType });
+    mediaRecorderRef.current = recorder;
+    recordedChunksRef.current = [];
+
+    // Every 1 second the recorder gives us a chunk of data
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        recordedChunksRef.current.push(e.data);
+      }
+    };
+
+    // ── When the recorder stops: upload to S3 ──────────────
+    // Instead of downloading the file, we upload it to our
+    // /api/recordings/upload endpoint which puts it in S3
+    // and saves the record in the database.
+    recorder.onstop = async () => {
+      const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+      recordedChunksRef.current = [];
+
+      // Build the form data with the file, room ID, and start time
+      const formData = new FormData();
+      formData.append("file", blob, "recording.webm");
+      formData.append("roomId", room.id);
+      // Include the shared start time so the server can save it
+      // for FFmpeg sync later
+      if (sharedStartTimeRef.current !== null) {
+        formData.append("startTime", sharedStartTimeRef.current.toString());
+      }
+
+      // Show uploading indicator
+      setIsUploading(true);
+
+      try {
+        const res = await fetch("/api/recordings/upload", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // Show a brief "Upload complete" message
+          setUploadComplete(true);
+          setTimeout(() => setUploadComplete(false), 3000);
+          // Refresh the page data so the recordings list updates
+          router.refresh();
+        } else {
+          console.error("Upload failed:", data.error);
+          alert("Upload failed: " + (data.error || "Unknown error"));
+        }
+      } catch (err) {
+        console.error("Server error:", err);
+        alert("Server error uploading recording.");
+      } finally {
+        setIsUploading(false);
+      }
+    };
+
+    // Start recording with a 1-second timeslice
+    recorder.start(1000);
+    setIsRecording(true);
+    setRecordingTime(0);
+
+    // Tick the on-screen timer every second
+    recordingTimerRef.current = setInterval(() => {
+      setRecordingTime((prev) => prev + 1);
+    }, 1000);
+  }, [room.id, router]);
+
+  // ──────────────────────────────────────────────────────────
+  // stopLocalRecording — stops the MediaRecorder and timer.
+  // The recorder.onstop handler (above) will automatically
+  // upload the file to S3.
+  // ──────────────────────────────────────────────────────────
+  const stopLocalRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setIsRecording(false);
   }, []);
 
   // ── Main Effect: Setup media + socket ─────────────────────
@@ -245,6 +361,27 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
           remoteVideoRef.current.srcObject = null;
         }
       });
+
+      // ────────────────────────────────────────────────────────
+      // RECORDING SOCKET EVENTS
+      // Both host and guest listen for these. The server generates
+      // a sharedStartTime and sends it to everyone in the room.
+      // Both sides then independently start their own MediaRecorder
+      // on their own localStream, using the same sharedStartTime.
+      // ────────────────────────────────────────────────────────
+
+      // ── start-recording (received from server) ─────────────
+      // The server sends { sharedStartTime } to BOTH host and guest
+      socket.on("start-recording", ({ sharedStartTime }: { sharedStartTime: number }) => {
+        console.log("[Recording] Received start-recording event, sharedStartTime:", sharedStartTime);
+        startLocalRecording(sharedStartTime);
+      });
+
+      // ── stop-recording (received from server) ──────────────
+      socket.on("stop-recording", () => {
+        console.log("[Recording] Received stop-recording event");
+        stopLocalRecording();
+      });
     }
 
     init();
@@ -259,7 +396,6 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
       }
 
       // Cleanup recording resources
-      if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         mediaRecorderRef.current.stop();
@@ -275,7 +411,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         socketRef.current.disconnect();
       }
     };
-  }, [room.id, createPeerConnection]);
+  }, [room.id, createPeerConnection, startLocalRecording, stopLocalRecording]);
 
   // ── Auto-LIVE on connect ─────────────────────────────────
   useEffect(() => {
@@ -306,114 +442,34 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     }
   };
 
-  // ── Recording Methods ───────────────────────────────────
-  const startRecording = async () => {
-    if (!localStreamRef.current || !remoteStreamRef.current) {
-      alert("Cannot start recording until both peers are connected.");
+  // ──────────────────────────────────────────────────────────
+  // HOST-ONLY button handlers
+  // When the host clicks Record, the host emits "start-recording"
+  // to the server. The server generates a sharedStartTime and
+  // broadcasts it back to BOTH host and guest via the
+  // "start-recording" event. So the host does NOT call
+  // startLocalRecording directly — it waits for the server's
+  // broadcast just like the guest does.
+  // Same pattern for Stop.
+  // ──────────────────────────────────────────────────────────
+  const handleHostStartRecording = () => {
+    if (!localStreamRef.current) {
+      alert("Cannot start recording — camera/mic not available.");
       return;
     }
-
-    try {
-      // 1. Audio mixing
-      const audioCtx = new window.AudioContext();
-      const dest = audioCtx.createMediaStreamDestination();
-      audioCtx.createMediaStreamSource(localStreamRef.current).connect(dest);
-      audioCtx.createMediaStreamSource(remoteStreamRef.current).connect(dest);
-
-      // 2. Canvas drawing
-      const canvas = document.createElement("canvas");
-      canvas.width = 1280;
-      canvas.height = 360;
-      const ctx = canvas.getContext("2d")!;
-
-      const drawFrame = () => {
-        ctx.fillStyle = "black";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        if (localVideoRef.current) {
-          ctx.drawImage(localVideoRef.current, 0, 0, 640, 360);
-        }
-        if (remoteVideoRef.current) {
-          ctx.drawImage(remoteVideoRef.current, 640, 0, 640, 360);
-        }
-        animationFrameIdRef.current = requestAnimationFrame(drawFrame);
-      };
-      drawFrame();
-
-      // 3. Create MediaRecorder
-      const canvasStream = canvas.captureStream(30);
-      const combinedTracks = [
-        ...canvasStream.getVideoTracks(),
-        ...dest.stream.getAudioTracks(),
-      ];
-      const combinedStream = new MediaStream(combinedTracks);
-
-      const recorder = new MediaRecorder(combinedStream, { mimeType: "video/webm" });
-      mediaRecorderRef.current = recorder;
-      recordedChunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          recordedChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
-        recordedChunksRef.current = [];
-        
-        setIsUploading(true);
-        const formData = new FormData();
-        formData.append("file", blob, "recording.webm");
-        formData.append("roomId", room.id);
-
-        try {
-          const res = await fetch("/api/recordings/upload", {
-            method: "POST",
-            body: formData,
-          });
-          const data = await res.json();
-          if (data.success) {
-            router.refresh(); // Refresh to show new recording
-          } else {
-            console.error("Upload failed:", data.error);
-            alert("Upload failed.");
-          }
-        } catch (err) {
-          console.error("Server error:", err);
-          alert("Server error uploading recording.");
-        } finally {
-          setIsUploading(false);
-        }
-      };
-
-      recorder.start(1000);
-      setIsRecording(true);
-      setRecordingTime(0);
-
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
-
-    } catch (err) {
-      console.error("Error starting recording:", err);
-      alert("Error starting recording. Ensure your browser allows AudioContext.");
-    }
+    // Tell the server to generate a sharedStartTime and broadcast
+    // "start-recording" to everyone in the room (including us)
+    socketRef.current?.emit("start-recording");
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-    }
-    if (animationFrameIdRef.current) {
-      cancelAnimationFrame(animationFrameIdRef.current);
-    }
-    if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
-    }
-    setIsRecording(false);
+  const handleHostStopRecording = () => {
+    // Tell the server to broadcast "stop-recording" to everyone
+    socketRef.current?.emit("stop-recording");
+    // Also stop our own recording right away (don't wait for the round-trip)
+    stopLocalRecording();
   };
 
+  // ── Format seconds into MM:SS for the timer display ──────
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, "0");
     const s = (seconds % 60).toString().padStart(2, "0");
@@ -476,6 +532,39 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         </div>
       )}
 
+      {/* ── Recording Indicator ──────────────────────────────
+           Shown on BOTH host and guest while recording is active
+           so everyone knows they are being recorded. */}
+      {isRecording && (
+        <div className="mb-6 flex items-center gap-3 bg-red-900/30 border border-red-700 rounded-lg px-4 py-3">
+          <span className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+          <span className="text-red-100 font-semibold">Recording</span>
+          <span className="font-mono text-red-200">{formatTime(recordingTime)}</span>
+        </div>
+      )}
+
+      {/* ── Uploading Indicator ──────────────────────────────
+           Shown on BOTH host and guest while their file is
+           being uploaded to S3 after recording stops. */}
+      {isUploading && (
+        <div className="mb-6 flex items-center gap-3 bg-blue-900/30 border border-blue-700 rounded-lg px-4 py-3">
+          <svg className="animate-spin h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="text-blue-100 font-medium">Uploading recording to S3...</span>
+        </div>
+      )}
+
+      {/* ── Upload Complete Message ──────────────────────────
+           Briefly shown after a successful upload. */}
+      {uploadComplete && (
+        <div className="mb-6 flex items-center gap-3 bg-green-900/30 border border-green-700 rounded-lg px-4 py-3">
+          <span className="text-green-400 text-lg">✓</span>
+          <span className="text-green-100 font-medium">Upload complete!</span>
+        </div>
+      )}
+
       {/* Video Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
         {/* Local Video */}
@@ -529,40 +618,27 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
 
       {/* Action Buttons */}
       <div className="flex items-center gap-4">
+        {/* ── Record button — HOST only, shown when connected
+             and not currently recording or uploading ──────── */}
         {isHost && connectionStatus === "connected" && !isRecording && !isUploading && (
           <button
-            onClick={startRecording}
+            onClick={handleHostStartRecording}
             className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2"
           >
             ⏺ Start Recording
           </button>
         )}
 
+        {/* ── Stop button — HOST only, shown while recording ─ */}
         {isHost && isRecording && (
-          <div className="flex items-center gap-4 bg-red-900/40 border border-red-700 rounded-lg px-4 py-2">
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
-              <span className="font-mono text-red-100">{formatTime(recordingTime)}</span>
-            </div>
-            <button
-              onClick={stopRecording}
-              className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-            >
-              ⏹ Stop
-            </button>
-          </div>
+          <button
+            onClick={handleHostStopRecording}
+            className="bg-gray-800 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2 border border-red-700"
+          >
+            ⏹ Stop Recording
+          </button>
         )}
 
-        {isHost && isUploading && (
-          <div className="flex items-center gap-3 bg-blue-900/40 border border-blue-700 rounded-lg px-6 py-3">
-            <svg className="animate-spin h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span className="text-blue-100 font-medium">Uploading to S3...</span>
-          </div>
-        )}
-        
         {isHost && (
           <button
             onClick={handleEndSession}
@@ -598,7 +674,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
                     <p className="text-sm font-semibold">
                       {recording.user.name || recording.user.email}
                     </p>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-gray-500" suppressHydrationWarning>
                       {new Date(recording.createdAt).toLocaleString()}
                     </p>
                   </div>
@@ -620,4 +696,3 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     </div>
   );
 }
-

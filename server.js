@@ -89,6 +89,33 @@ app.prepare().then(async () => {
       socket.to(to).emit("ice-candidate", { candidate, from: socket.id });
     });
 
+    // ── start-recording ──────────────────────────────────────
+    // Host tells everyone in the room to start recording.
+    // The server generates a single sharedStartTime so both
+    // host and guest have the exact same reference timestamp
+    // (used later for FFmpeg sync).
+    socket.on("start-recording", () => {
+      const roomId = socket.data.roomId;
+      if (roomId) {
+        const sharedStartTime = Date.now();
+        console.log(`[Socket.io] start-recording from ${socket.id} in room ${roomId} at ${sharedStartTime}`);
+        // Send to everyone ELSE in the room (the guest)
+        socket.to(roomId).emit("start-recording", { sharedStartTime });
+        // Also send back to the host so they use the same timestamp
+        socket.emit("start-recording", { sharedStartTime });
+      }
+    });
+
+    // ── stop-recording ───────────────────────────────────────
+    // Host tells everyone else in the room to stop recording
+    socket.on("stop-recording", () => {
+      const roomId = socket.data.roomId;
+      if (roomId) {
+        console.log(`[Socket.io] stop-recording from ${socket.id} in room ${roomId}`);
+        socket.to(roomId).emit("stop-recording");
+      }
+    });
+
     // ── disconnect ───────────────────────────────────────────
     // Clean up when a user leaves
     socket.on("disconnect", () => {
