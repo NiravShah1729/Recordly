@@ -11,7 +11,7 @@ export default function AutoRefresh({ isProcessing }: { isProcessing: boolean })
 
     const interval = setInterval(() => {
       router.refresh();
-    }, 10000);
+    }, 100000);
 
     return () => clearInterval(interval);
   }, [isProcessing, router]);

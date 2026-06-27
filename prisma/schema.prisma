@@ -36,6 +36,14 @@ enum ProcessingStatus {
   FAILED       // Something went wrong
 }
 
+// Tracks the status of combining multiple recordings into one video
+enum CombineStatus {
+  PENDING      // Waiting for all participants to upload
+  PROCESSING   // FFmpeg is combining the recordings
+  READY        // Combined video is ready to watch
+  FAILED       // Something went wrong during combining
+}
+
 // ══════════════════════════════════════════════════════════════
 // MODELS — These become PostgreSQL tables
 // Each field becomes a column
@@ -120,6 +128,12 @@ model Room {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
   endedAt     DateTime?  // null until the session ends
+
+  // ── Combined recording fields ─────────────────────────────
+  // After all participants upload, FFmpeg combines their videos
+  combinedS3Key  String?        // S3 path of the combined MP4
+  combinedUrl    String?        // Public URL to the combined MP4
+  combineStatus  CombineStatus  @default(PENDING)
 
   // Relations
   // This creates the hostId → User.id foreign key

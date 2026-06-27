@@ -75,6 +75,11 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   // Brief "Upload complete" message
   const [uploadComplete, setUploadComplete] = useState(false);
 
+  // ── Combined Recording State ──────────────────────────────
+  // Tracks the status of FFmpeg combining all participants' recordings
+  const [combineStatus, setCombineStatus] = useState<string>("PENDING");
+  const [combinedUrl, setCombinedUrl] = useState<string | null>(null);
+
   // ── ICE Servers (STUN for NAT traversal) ─────────────────
   const iceServers = {
     iceServers: [
@@ -425,6 +430,39 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     }
   }, [isHost, connectionStatus, currentRoomStatus, room.id]);
 
+  // ── Poll for combined recording status ────────────────────
+  // Every 5 seconds, check if the server has finished combining
+  // all participant recordings into one video. Stop polling once
+  // the status is READY or FAILED.
+  useEffect(() => {
+    // Only poll if there are recordings and status is not final
+    if (room.recordings.length === 0) return;
+    if (combineStatus === "READY" || combineStatus === "FAILED") return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/rooms/${room.id}/combined`);
+        const data = await res.json();
+
+        if (data.combineStatus) {
+          setCombineStatus(data.combineStatus);
+        }
+        if (data.combinedUrl) {
+          setCombinedUrl(data.combinedUrl);
+        }
+
+        // Stop polling once we have a final status
+        if (data.combineStatus === "READY" || data.combineStatus === "FAILED") {
+          clearInterval(pollInterval);
+        }
+      } catch (err) {
+        console.error("Error polling combine status:", err);
+      }
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [room.id, room.recordings.length, combineStatus]);
+
   // ── End Session ─────────────────────────────────────────
   const handleEndSession = async () => {
     if (!confirm("Are you sure you want to end this session?")) return;
@@ -693,6 +731,86 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
           </div>
         )}
       </div>
+
+      {/* ── Combined Recording Section ──────────────────────────
+           Shows the status of combining all participant recordings
+           into one side-by-side video. Polls the server every 5s
+           until the combined video is READY or FAILED. */}
+      {room.recordings.length > 0 && (
+        <div className="mt-12">
+          <h2 className="text-2xl font-bold mb-6">
+            🎬 Combined Recording
+          </h2>
+
+          {/* PENDING — Waiting for all participants to finish uploading */}
+          {combineStatus === "PENDING" && (
+            <div className="bg-gray-800 rounded-xl p-6 flex items-center gap-4">
+              <svg className="animate-spin h-6 w-6 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <div>
+                <p className="text-yellow-100 font-medium">Waiting for all participants to upload...</p>
+                <p className="text-gray-400 text-sm mt-1">
+                  Once everyone&apos;s recording is processed, they&apos;ll be automatically combined.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* PROCESSING — FFmpeg is combining the recordings */}
+          {combineStatus === "PROCESSING" && (
+            <div className="bg-gray-800 rounded-xl p-6 flex items-center gap-4">
+              <svg className="animate-spin h-6 w-6 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <div>
+                <p className="text-blue-100 font-medium">Combining recordings...</p>
+                <p className="text-gray-400 text-sm mt-1">
+                  FFmpeg is creating a side-by-side combined video. This may take a few minutes.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* READY — Combined video is ready to watch */}
+          {combineStatus === "READY" && combinedUrl && (
+            <div className="bg-gray-800 rounded-xl p-4 flex flex-col gap-4">
+              <video
+                src={combinedUrl}
+                controls
+                className="w-full rounded-lg border border-gray-700"
+              />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-green-400">✅ Combined video ready</p>
+                  <p className="text-xs text-gray-500">Side-by-side view of all participants</p>
+                </div>
+                <a
+                  href={combinedUrl}
+                  download={`${room.name}-combined.mp4`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+                >
+                  ⬇ Download Combined
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* FAILED — Something went wrong during combining */}
+          {combineStatus === "FAILED" && (
+            <div className="bg-red-900/30 border border-red-700 rounded-xl p-6">
+              <p className="text-red-300 font-medium">❌ Failed to combine recordings</p>
+              <p className="text-gray-400 text-sm mt-1">
+                Something went wrong during the combining process. Check the server logs for details.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

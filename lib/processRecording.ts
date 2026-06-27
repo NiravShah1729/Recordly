@@ -141,6 +141,54 @@ export async function processRecording(recordingId: string) {
     });
 
     console.log(`[FFmpeg] Processing complete for recording ${recordingId}`);
+
+    // ── Check if all participants have uploaded ─────────────
+    // If this recording belongs to a room, check whether all
+    // participants' recordings are now READY. If yes, trigger
+    // the combineRecordings job to create the final combined video.
+    if (recording.roomId && recording.startTime) {
+      try {
+        // Find all recordings for this room with a similar startTime
+        // (within 10 seconds — accounts for slight network delay
+        // between when each browser starts recording)
+        const tenSeconds = 10 * 1000; // 10 seconds in milliseconds
+        const startMs = recording.startTime.getTime();
+
+        const roomRecordings = await prisma.recording.findMany({
+          where: {
+            roomId: recording.roomId,
+            startTime: {
+              gte: new Date(startMs - tenSeconds),
+              lte: new Date(startMs + tenSeconds),
+            },
+          },
+        });
+
+        // Count how many distinct users uploaded
+        const distinctUsers = new Set(roomRecordings.map((r) => r.userId));
+        // Count how many of those have status READY
+        const readyCount = roomRecordings.filter((r) => r.status === "READY").length;
+
+        console.log(
+          `[Combine Check] Room ${recording.roomId}: ` +
+          `${readyCount}/${distinctUsers.size} recordings READY`
+        );
+
+        // If we have at least 2 participants and ALL are READY → combine!
+        if (distinctUsers.size >= 2 && readyCount === distinctUsers.size) {
+          console.log(`[Combine Check] All participants ready — triggering combine`);
+          // Fire and forget — don't await
+          import("./combineRecordings").then(({ combineRecordings }) => {
+            combineRecordings(recording.roomId!).catch((err) => {
+              console.error("[Combine Check] Background combine failed:", err);
+            });
+          });
+        }
+      } catch (combineCheckError) {
+        // Don't let a combine-check failure break the individual processing
+        console.error("[Combine Check] Error checking combine readiness:", combineCheckError);
+      }
+    }
   } catch (error) {
     console.error(`[FFmpeg] Error processing recording ${recordingId}:`, error);
     try {

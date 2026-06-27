@@ -31,6 +31,37 @@ export default async function RecordingsPage() {
     orderBy: { createdAt: "desc" },
   });
 
+  // Fetch rooms where the user is host or participant and a combined video exists
+  const combinedRooms = await prisma.room.findMany({
+    where: {
+      combineStatus: "READY",
+      combinedS3Key: { not: null },
+      OR: [
+        { hostId: user.id },
+        { participants: { some: { id: user.id } } },
+      ],
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  // Generate presigned URLs for combined recordings
+  const combinedWithUrls = await Promise.all(
+    combinedRooms.map(async (room) => {
+      let presignedUrl = null;
+      try {
+        if (room.combinedS3Key) {
+          presignedUrl = await getPresignedUrl(room.combinedS3Key);
+        }
+      } catch (error) {
+        console.error("Failed to generate presigned URL for combined", room.id, error);
+      }
+      return {
+        ...room,
+        displayUrl: presignedUrl || room.combinedUrl,
+      };
+    })
+  );
+
   const recordingsWithPresignedUrls = await Promise.all(
     recordings.map(async (recording) => {
       let presignedUrl = null;
@@ -111,6 +142,61 @@ export default async function RecordingsPage() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Combined Recordings Section ──────────────────────── */}
+      {combinedWithUrls.length > 0 && (
+        <div className="mt-12">
+          <h2 className="text-2xl font-bold mb-6">🎬 Combined Recordings</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {combinedWithUrls.map((room) => (
+              <div
+                key={room.id}
+                className="bg-gray-800 rounded-xl p-4 flex flex-col gap-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-1 text-xs font-bold rounded bg-green-600 text-green-100">
+                    COMBINED
+                  </span>
+                </div>
+
+                {room.displayUrl ? (
+                  <video
+                    src={room.displayUrl}
+                    controls
+                    className="w-full rounded-lg border border-gray-700"
+                  />
+                ) : (
+                  <div className="w-full aspect-video bg-gray-700 rounded-lg flex items-center justify-center border border-gray-600">
+                    <span className="text-gray-400 text-sm">URL unavailable</span>
+                  </div>
+                )}
+
+                <div>
+                  <p className="text-sm font-semibold">{room.name}</p>
+                  <p className="text-xs text-gray-500">
+                    Side-by-side view of all participants
+                  </p>
+                  <p className="text-sm text-gray-400" suppressHydrationWarning>
+                    {new Date(room.updatedAt).toLocaleString()}
+                  </p>
+                </div>
+
+                {room.displayUrl && (
+                  <a
+                    href={room.displayUrl}
+                    download={`${room.name}-combined.mp4`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-green-600 hover:bg-green-700 text-white text-center px-4 py-2 rounded-lg text-sm font-semibold mt-auto"
+                  >
+                    ⬇ Download Combined
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
