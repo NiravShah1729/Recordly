@@ -1,100 +1,311 @@
+<div align="center">
+
 # Recordly
 
-Recordly is a modern web application built with Next.js that allows users to create recording rooms, invite participants via shareable links, and seamlessly record their sessions. It features robust backend integration for handling video uploads, cloud storage, and video transcoding to ensure optimized viewing across devices.
+**Browser-based video recording studio with real-time WebRTC calls, per-participant local recording, and automated FFmpeg post-production.**
 
-## 🚀 Key Features
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Prisma](https://img.shields.io/badge/Prisma-7-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io/)
+[![Socket.io](https://img.shields.io/badge/Socket.io-4-010101?logo=socket.io&logoColor=white)](https://socket.io/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
 
-- **Authentication**: Secure user login and session management powered by NextAuth.js.
-- **Room Management**: Create dedicated rooms with auto-generated, shareable invite codes for participants to join.
-- **Live Recording**: Record high-quality video and audio directly from your browser.
-- **Video Processing & Transcoding**: Automatic background processing of uploaded videos into multiple resolutions (1080p, 720p, 480p, 360p) using FFmpeg.
-- **Optimized Video Delivery**: Support for smooth HLS video streaming and direct MP4 downloads utilizing AWS S3 and CloudFront CDN.
-- **Modern & Responsive UI**: Built with React 19 and styled effortlessly with Tailwind CSS for a premium feel.
+</div>
 
-## 🛠️ Tech Stack
+---
 
-- **Frontend**: [Next.js 16](https://nextjs.org/) (App Router), React 19
-- **Styling**: [Tailwind CSS v4](https://tailwindcss.com/)
-- **Database & ORM**: PostgreSQL with [Prisma](https://www.prisma.io/)
-- **Authentication**: [NextAuth.js (v4)](https://next-auth.js.org/) / [Clerk](https://clerk.dev/)
-- **Cloud Infrastructure**: AWS S3 (Storage) & CloudFront (CDN)
-- **Video Processing**: FFmpeg
+## Overview
 
-## 🏁 Getting Started
+Recordly is a full-stack web application that enables two participants to join a live video call, independently record their own high-quality local streams, and automatically produce a combined side-by-side video -- all from the browser, with no desktop software required.
+
+Unlike screen-recording tools that capture compressed WebRTC output, Recordly records each participant's raw camera and microphone feed locally via the MediaRecorder API, uploads the individual files to S3, transcodes them server-side with FFmpeg, and then combines them into a single synchronized output.
+
+---
+
+## Key Features
+
+| Feature | Description |
+|---|---|
+| **Real-time Video Calls** | Peer-to-peer WebRTC connections via Socket.io signaling with STUN-based NAT traversal |
+| **Local-quality Recording** | Each participant records their own raw MediaStream -- no WebRTC compression artifacts |
+| **Synchronized Capture** | Server-generated shared timestamp ensures frame-accurate alignment across participants |
+| **Automated Transcoding** | Background FFmpeg pipeline converts WebM uploads to optimized MP4 with thumbnail extraction |
+| **Combined Video Output** | Side-by-side FFmpeg composition with offset-aware phased layout (full-screen to split-screen) |
+| **Invite-based Rooms** | Create rooms with auto-generated invite codes; share a link for guests to join |
+| **Room Lifecycle** | Rooms transition through `WAITING` -> `LIVE` -> `ENDED` states with host controls |
+| **Presigned URL Delivery** | Secure, time-limited S3 presigned URLs for video playback and downloads |
+| **Authentication** | NextAuth.js with JWT sessions and Prisma adapter for user persistence |
+| **Responsive Dashboard** | Room management, recording history, and combined video access in one place |
+
+---
+
+## Architecture
+
+```
+Browser A (Host)                    Browser B (Guest)
++-----------------+                 +-----------------+
+| getUserMedia()  |                 | getUserMedia()  |
+| localStream ----|--- WebRTC ------|---- localStream |
+|                 |   (live call)   |                 |
+| MediaRecorder   |                 | MediaRecorder   |
+| (records local) |                 | (records local) |
++--------+--------+                 +--------+--------+
+         |                                   |
+         |  upload webm                      |  upload webm
+         v                                   v
++--------------------------------------------------+
+|              Next.js API  +  Socket.io            |
+|                                                   |
+|  /api/recordings/upload   (receives raw files)    |
+|  processRecording()       (webm -> mp4 + thumb)   |
+|  combineRecordings()      (side-by-side merge)    |
++-------------------------+------------------------+
+                          |
+              +-----------+-----------+
+              |      AWS S3 Bucket    |
+              |  raw/    processed/   |
+              |  thumbnails/          |
+              |  combined/            |
+              +-----------+-----------+
+                          |
+              +-----------+-----------+
+              |     PostgreSQL        |
+              |  (Prisma ORM)         |
+              |  Users, Rooms,        |
+              |  Recordings,          |
+              |  VideoQualities       |
+              +-----------------------+
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| Runtime | React 19, TypeScript 5 |
+| Styling | Tailwind CSS v4 |
+| Real-time | Socket.io 4 (custom `server.js`) |
+| Video Calls | WebRTC (native browser API) |
+| Recording | MediaRecorder API (browser-side) |
+| Transcoding | FFmpeg via `fluent-ffmpeg` |
+| Database | PostgreSQL (Neon-compatible) |
+| ORM | Prisma 7 |
+| Auth | NextAuth.js v4 (JWT + Prisma Adapter) |
+| Storage | AWS S3 |
+| HTTPS (dev) | Self-signed certs via `selfsigned` |
+
+---
+
+## Database Schema
+
+```
+User
+ |-- id, name, email, image
+ |-- has many -> Room (as host)
+ |-- has many -> Recording
+ |-- many-to-many -> Room (as participant)
+
+Room
+ |-- id, name, description, inviteCode, status
+ |-- hostId -> User
+ |-- combineStatus, combinedS3Key, combinedUrl
+ |-- has many -> Recording
+
+Recording
+ |-- id, fileName, s3Key, cdnUrl, status, duration
+ |-- startTime (shared timestamp for FFmpeg sync)
+ |-- roomId -> Room
+ |-- userId -> User
+ |-- has many -> VideoQuality
+
+VideoQuality
+ |-- id, label, width, height, bitrate
+ |-- s3Key, cdnUrl, hlsUrl
+ |-- recordingId -> Recording
+```
+
+**Enums:**
+
+| Enum | Values |
+|---|---|
+| `RoomStatus` | `WAITING`, `LIVE`, `ENDED` |
+| `ProcessingStatus` | `UPLOADING`, `PROCESSING`, `READY`, `FAILED` |
+| `CombineStatus` | `PENDING`, `PROCESSING`, `READY`, `FAILED` |
+
+---
+
+## Getting Started
 
 ### Prerequisites
 
-Make sure you have the following installed and configured on your local machine:
-- Node.js (v18 or higher recommended)
-- PostgreSQL Database
-- AWS Account (S3 Bucket and CloudFront distribution set up)
-- FFmpeg (if running video processing locally)
+- **Node.js** v18+
+- **PostgreSQL** database (local or hosted, e.g., [Neon](https://neon.tech/))
+- **AWS Account** with an S3 bucket configured
+- **FFmpeg** installed and available in `PATH` (or use the bundled `@ffmpeg-installer/ffmpeg`)
 
-### Installation
+### 1. Clone the repository
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/NiravShah1729/Recordly.git
-   cd recordly
-   ```
+```bash
+git clone https://github.com/NiravShah1729/Recordly.git
+cd Recordly
+```
 
-2. **Install dependencies:**
-   ```bash
-   npm install
-   # or
-   yarn install
-   # or
-   pnpm install
-   ```
+### 2. Install dependencies
 
-3. **Configure Environment Variables:**
-   Create a `.env` file in the root directory and define the following variables:
-   ```env
-   # Database Configuration
-   DATABASE_URL="postgresql://user:password@localhost:5432/recordly?schema=public"
+```bash
+npm install
+```
 
-   # Authentication Configuration (e.g., NextAuth / Clerk keys depending on your active setup)
-   NEXTAUTH_URL="http://localhost:3000"
-   NEXTAUTH_SECRET="your-super-secret-key"
+### 3. Configure environment variables
 
-   # AWS Configuration
-   # AWS_REGION="us-east-1"
-   # AWS_ACCESS_KEY_ID="your-access-key"
-   # AWS_SECRET_ACCESS_KEY="your-secret-key"
-   # AWS_S3_BUCKET_NAME="your-bucket-name"
-   # AWS_CLOUDFRONT_DOMAIN="your-cloudfront-id.cloudfront.net"
-   ```
+Create a `.env` file in the project root:
 
-4. **Initialize the Database:**
-   Generate the Prisma client and run migrations to create the required tables in your database.
-   ```bash
-   npx prisma generate
-   npx prisma migrate dev
-   ```
+```env
+# Database
+DATABASE_URL="postgresql://user:password@host:5432/dbname?sslmode=require"
 
-5. **Start the Development Server:**
-   ```bash
-   npm run dev
-   # or
-   yarn dev
-   # or
-   pnpm dev
-   ```
+# NextAuth
+NEXTAUTH_SECRET="your-random-secret-key"
+NEXTAUTH_URL="https://localhost:3000"
 
-   Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+# AWS S3
+AWS_REGION="us-east-1"
+AWS_ACCESS_KEY_ID="your-access-key"
+AWS_SECRET_ACCESS_KEY="your-secret-key"
+AWS_S3_BUCKET_NAME="your-bucket-name"
+```
 
-## 🗄️ Database Schema Overview
+### 4. Initialize the database
 
-The core database architecture includes:
-- **`User`**, **`Account`**, **`Session`**: Standard NextAuth.js tables for managing users and OAuth connections.
-- **`Room`**: Holds data for recording sessions. It tracks `status` (WAITING, LIVE, ENDED) and generates unique `inviteCodes`.
-- **`Recording`**: References uploaded media files inside an S3 bucket and tracks their processing status (UPLOADING, PROCESSING, READY, FAILED).
-- **`VideoQuality`**: Keeps references to multiple transcoded video qualities (1080p, 720p, etc.) for each base recording, providing HLS stream URLs and CDN paths.
+```bash
+npx prisma generate
+npx prisma migrate dev
+```
 
-## 🤝 Contributing
+### 5. Start the development server
 
-We welcome contributions! Please follow the conventional commit messages and ensure your code is fully tested and properly formatted (`npm run lint`).
+```bash
+npm run dev
+```
 
-## 📄 License
+The server starts with a self-signed HTTPS certificate (required for `getUserMedia` on non-localhost origins). Open `https://localhost:3000` and accept the browser security warning.
 
-This project is proprietary.
+> **Tip:** To test with a second device on your local network, use the network URL printed in the terminal (e.g., `https://192.168.x.x:3000`). Both devices must accept the self-signed certificate warning.
+
+---
+
+## Project Structure
+
+```
+recordly/
+|-- app/
+|   |-- api/
+|   |   |-- auth/             # NextAuth API routes
+|   |   |-- recordings/       # Upload + list endpoints
+|   |   |-- rooms/            # CRUD + status endpoints
+|   |-- auth/signin/          # Custom sign-in page
+|   |-- dashboard/            # Room management + stats
+|   |-- recordings/           # Recording gallery with combined videos
+|   |-- room/[inviteCode]/    # Live room (WebRTC + recording UI)
+|   |-- layout.tsx            # Root layout with providers
+|   |-- page.tsx              # Landing page
+|-- components/
+|   |-- CopyButton/           # Clipboard copy utility
+|   |-- Navbar/               # Navigation bar
+|   |-- SessionProvider/      # NextAuth session wrapper
+|-- lib/
+|   |-- auth.ts               # NextAuth configuration
+|   |-- combineRecordings.ts  # FFmpeg side-by-side merge pipeline
+|   |-- ffmpeg.ts             # FFmpeg + ffprobe setup
+|   |-- prisma.ts             # Prisma client singleton
+|   |-- processRecording.ts   # WebM -> MP4 transcoding pipeline
+|   |-- s3.ts                 # S3 client + presigned URL helper
+|-- prisma/
+|   |-- schema.prisma         # Database schema
+|   |-- migrations/           # Migration history
+|-- server.js                 # Custom HTTPS + Socket.io server
+|-- next.config.ts            # Next.js configuration
+```
+
+---
+
+## How Recording Works
+
+1. **Host clicks "Start Recording"** -- emits a `start-recording` event to the Socket.io server.
+
+2. **Server generates a shared timestamp** and broadcasts `start-recording` with `sharedStartTime` to all participants in the room.
+
+3. **Each browser independently** creates a `MediaRecorder` on its own `localStream` (camera + mic), not the compressed WebRTC remote stream.
+
+4. **On stop**, each browser uploads its raw WebM blob to `/api/recordings/upload`, tagged with the room ID, user ID, and shared start time.
+
+5. **Background processing** triggers automatically:
+   - `processRecording()` -- transcodes WebM to MP4, extracts duration and thumbnail, replaces the raw file in S3.
+   - Once all participants' recordings reach `READY` status, `combineRecordings()` fires.
+
+6. **FFmpeg combines** the recordings into a single 1280x720 output:
+   - If both started simultaneously: full split-screen for the entire duration.
+   - If the guest joined late: Phase 1 (host full-screen) concatenated with Phase 2 (split-screen), using the timestamp offset for alignment.
+
+7. **Combined video** is uploaded to S3 under `combined/` and the room record is updated with the final URL.
+
+---
+
+## API Routes
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/rooms` | List rooms for the authenticated user |
+| `POST` | `/api/rooms/create` | Create a new room |
+| `PATCH` | `/api/rooms/[id]` | Update room status |
+| `GET` | `/api/rooms/[id]/combined` | Poll combined recording status |
+| `GET` | `/api/recordings` | List recordings for the authenticated user |
+| `POST` | `/api/recordings/upload` | Upload a recording blob to S3 |
+
+---
+
+## Socket.io Events
+
+| Event | Direction | Payload | Description |
+|---|---|---|---|
+| `join-room` | Client -> Server | `roomId` | Join a signaling room |
+| `user-joined` | Server -> Client | `{ socketId }` | Notify existing peers of a new participant |
+| `offer` | Client -> Server -> Client | `{ offer, to }` | WebRTC SDP offer relay |
+| `answer` | Client -> Server -> Client | `{ answer, to }` | WebRTC SDP answer relay |
+| `ice-candidate` | Client -> Server -> Client | `{ candidate, to }` | ICE candidate relay |
+| `start-recording` | Bidirectional | `{ sharedStartTime }` | Trigger synchronized recording start |
+| `stop-recording` | Client -> Server -> Client | -- | Trigger recording stop |
+| `user-left` | Server -> Client | `{ socketId }` | Notify peers of a disconnection |
+
+---
+
+## Scripts
+
+| Command | Description |
+|---|---|
+| `npm run dev` | Start development server (HTTPS + Socket.io) |
+| `npm run build` | Build production bundle |
+| `npm run start` | Start production server |
+| `npm run lint` | Run ESLint |
+
+---
+
+## Contributing
+
+Contributions are welcome. Please follow these guidelines:
+
+1. Fork the repository and create a feature branch.
+2. Follow existing code conventions and TypeScript strict mode.
+3. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
+4. Ensure `npm run lint` passes before submitting a pull request.
+5. Open an issue first for large changes or architectural modifications.
+
+---
+
+## License
+
+This project is proprietary. All rights reserved.
