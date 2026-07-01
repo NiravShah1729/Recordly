@@ -2,9 +2,52 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
+import * as mediasoupClient from "mediasoup-client";
+import type { types as mediasoupTypes } from "mediasoup-client";
 import Link from "next/link";
 import CopyButton from "@/components/CopyButton/index";
 import { useRouter } from "next/navigation";
+
+const RemoteVideo = ({ stream, socketId }: { stream: MediaStream, socketId: string }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el && el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+  }, [stream]);
+
+  // Ensure playback starts when tracks are added dynamically
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+
+    const handleAddTrack = (e: MediaStreamTrackEvent) => {
+      console.log(`[RemoteVideo] Track added (${e.track.kind}) for peer ${socketId}`);
+      el.play().catch(err => {
+        if (err.name !== 'AbortError') console.error("[RemoteVideo] Play error:", err);
+      });
+    };
+
+    stream.addEventListener("addtrack", handleAddTrack);
+    // Also try to play immediately just in case
+    el.play().catch(err => {
+      if (err.name !== 'AbortError') console.error("[RemoteVideo] Initial play error:", err);
+    });
+
+    return () => stream.removeEventListener("addtrack", handleAddTrack);
+  }, [stream, socketId]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      className="w-full rounded-xl border border-gray-700 bg-gray-800"
+    />
+  );
+};
 
 // ── Types ──────────────────────────────────────────────────────
 type RecordingData = {
@@ -39,17 +82,40 @@ interface RoomClientProps {
   nextAuthUrl: string;
 }
 
+// ── Types for mediasoup server events ──────────────────────────
+// What the server sends when a new producer is created by another peer
+type ProducerInfo = {
+  producerId: string;
+  socketId: string;
+  kind: string;
+};
+
 // ── Component ──────────────────────────────────────────────────
 export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProps) {
-  // Refs for video elements and WebRTC objects
+  // ── Video refs ────────────────────────────────────────────────
+  // localVideoRef — the <video> element showing YOUR camera
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const socketRef = useRef<Socket | null>(null);
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  // localStreamRef — the raw MediaStream from getUserMedia (used by MediaRecorder for recording)
   const localStreamRef = useRef<MediaStream | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
 
-  // ── Recording refs ──────────────────────────────────────────
+  // ── Socket ref ────────────────────────────────────────────────
+  // Single socket connection to the mediasoup server (handles WebRTC + recording signals)
+  const socketRef = useRef<Socket | null>(null);
+
+  // ── Mediasoup refs ────────────────────────────────────────────
+  // The mediasoup Device — like a "browser capability descriptor" that knows
+  // what codecs your browser supports. Created once, used for all transports.
+  const deviceRef = useRef<mediasoupClient.Device | null>(null);
+  // Send transport — the "upload pipe" that sends your camera/mic to the server
+  const sendTransportRef = useRef<mediasoupTypes.Transport | null>(null);
+  // Receive transport — the "download pipe" that receives other peoples' streams
+  const recvTransportRef = useRef<mediasoupTypes.Transport | null>(null);
+  // Store all producers we created (video + audio) so we can close them on unmount
+  const producersRef = useRef<mediasoupTypes.Producer[]>([]);
+  // Store all consumers we created so we can close them on unmount
+  const consumersRef = useRef<mediasoupTypes.Consumer[]>([]);
+
+  // ── Recording refs (UNCHANGED from P2P version) ───────────────
   // MediaRecorder records the local camera+mic stream
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   // Chunks of recorded data collected every 1 second
@@ -60,14 +126,17 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   // so we can later align the recordings with FFmpeg
   const sharedStartTimeRef = useRef<number | null>(null);
 
-  // State
+  // ── State ─────────────────────────────────────────────────────
   const router = useRouter();
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("waiting");
   const [mediaError, setMediaError] = useState("");
-  const [remoteSocketId, setRemoteSocketId] = useState<string | null>(null);
   const [currentRoomStatus, setCurrentRoomStatus] = useState(room.status);
 
-  // Recording State
+  // Remote participants — a Map of socketId → MediaStream
+  // Each remote peer gets their own MediaStream containing their video+audio tracks
+  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+
+  // Recording State (UNCHANGED from P2P version)
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   // Upload state — shown while the file is being sent to S3
@@ -75,77 +144,18 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   // Brief "Upload complete" message
   const [uploadComplete, setUploadComplete] = useState(false);
 
-  // ── Combined Recording State ──────────────────────────────
+  // ── Combined Recording State (UNCHANGED from P2P version) ────
   // Tracks the status of FFmpeg combining all participants' recordings
   const [combineStatus, setCombineStatus] = useState<string>("PENDING");
   const [combinedUrl, setCombinedUrl] = useState<string | null>(null);
 
-  // ── ICE Servers (STUN for NAT traversal) ─────────────────
-  const iceServers = {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-    ],
-  };
-
-  // ── Create Peer Connection ────────────────────────────────
-  const createPeerConnection = useCallback((remoteId: string) => {
-    // Clean up existing connection if any
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-    }
-
-    const pc = new RTCPeerConnection(iceServers);
-    peerConnectionRef.current = pc;
-
-    // Add local tracks to the connection
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current!);
-      });
-    }
-
-    // When we receive remote tracks, display them
-    pc.ontrack = (event) => {
-      if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        remoteStreamRef.current = event.streams[0];
-      }
-    };
-
-    // Send ICE candidates to the remote peer via Socket.io
-    pc.onicecandidate = (event) => {
-      if (event.candidate && socketRef.current) {
-        socketRef.current.emit("ice-candidate", {
-          candidate: event.candidate,
-          to: remoteId,
-        });
-      }
-    };
-
-    // Track connection state changes
-    pc.onconnectionstatechange = () => {
-      switch (pc.connectionState) {
-        case "connected":
-          setConnectionStatus("connected");
-          break;
-        case "disconnected":
-        case "failed":
-        case "closed":
-          setConnectionStatus("disconnected");
-          break;
-      }
-    };
-
-    return pc;
-  }, []);
-
-  // ──────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────
   // startLocalRecording — records THIS browser's localStream
   // Called on BOTH host and guest when the "start-recording"
   // socket event fires. The sharedStartTime is passed in so
   // both sides store the same timestamp.
-  // ──────────────────────────────────────────────────────────
+  // (UNCHANGED from P2P version)
+  // ──────────────────────────────────────────────────────────────
   const startLocalRecording = useCallback((sharedStartTime: number) => {
     // Safety: need a local camera/mic stream to record
     if (!localStreamRef.current) {
@@ -224,17 +234,22 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     setIsRecording(true);
     setRecordingTime(0);
 
+    // Reset combined video state so the client polls for the new one
+    setCombineStatus("PENDING");
+    setCombinedUrl(null);
+
     // Tick the on-screen timer every second
     recordingTimerRef.current = setInterval(() => {
       setRecordingTime((prev) => prev + 1);
     }, 1000);
   }, [room.id, router]);
 
-  // ──────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────
   // stopLocalRecording — stops the MediaRecorder and timer.
   // The recorder.onstop handler (above) will automatically
   // upload the file to S3.
-  // ──────────────────────────────────────────────────────────
+  // (UNCHANGED from P2P version)
+  // ──────────────────────────────────────────────────────────────
   const stopLocalRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
@@ -246,12 +261,98 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     setIsRecording(false);
   }, []);
 
-  // ── Main Effect: Setup media + socket ─────────────────────
+  // ──────────────────────────────────────────────────────────────
+  // consumeProducer — Downloads a single remote producer's track
+  //
+  // When someone in the room starts sending their camera or mic,
+  // the server tells us "hey, there's a new producer". We call
+  // this function to create a Consumer that downloads that track
+  // and adds it to a MediaStream for that remote peer.
+  //
+  // Each remote peer can have TWO producers (video + audio), so
+  // we merge both tracks into a single MediaStream per peer.
+  // ──────────────────────────────────────────────────────────────
+  const consumeProducer = useCallback(async (
+    socket: Socket,
+    recvTransport: mediasoupTypes.Transport,
+    device: mediasoupClient.Device,
+    producerInfo: ProducerInfo,
+  ) => {
+    const { producerId, socketId, kind } = producerInfo;
+
+    try {
+      // Ask the server to create a Consumer for this producer
+      // We send our transport ID so the server knows which pipe to use,
+      // the producer ID we want to consume, and our RTP capabilities
+      // so the server can check codec compatibility.
+      const response: any = await new Promise((resolve) => {
+        socket.emit("consume", {
+          transportId: recvTransport.id,
+          producerId,
+          rtpCapabilities: device.rtpCapabilities,
+        }, resolve);
+      });
+
+      if (response.error) {
+        console.error("[Mediasoup] consume error:", response.error);
+        return;
+      }
+
+      const { params } = response;
+
+      // Create the Consumer — this gives us the actual media track
+      const consumer = await recvTransport.consume({
+        id: params.id,
+        producerId: params.producerId,
+        kind: params.kind,
+        rtpParameters: params.rtpParameters,
+      });
+
+      // Store so we can close on unmount
+      consumersRef.current.push(consumer);
+
+      // Tell the server to unpause (mediasoup starts consumers paused by default)
+      await new Promise<void>((resolve) => {
+        socket.emit("consumer-resume", { consumerId: consumer.id }, () => resolve());
+      });
+
+      // Add this track to the remote peer's MediaStream.
+      // If this is the first track from this peer, create a new MediaStream.
+      // If it's the second (e.g. audio after video), add to the existing one.
+      setRemoteStreams((prev) => {
+        const updated = new Map(prev);
+        const existingStream = updated.get(socketId);
+        if (existingStream) {
+          // Peer already has a stream (e.g. we got video, now getting audio)
+          // We mutate the existing stream. The RemoteVideo component will handle the rest.
+          existingStream.addTrack(consumer.track);
+        } else {
+          // First track from this peer — create new stream
+          updated.set(socketId, new MediaStream([consumer.track]));
+        }
+
+        return updated;
+      });
+
+      // We have at least one remote peer → we're connected
+      setConnectionStatus("connected");
+
+      console.log(`[Mediasoup] Consuming ${kind} from peer ${socketId}`);
+    } catch (err) {
+      console.error("[Mediasoup] Error consuming producer:", err);
+    }
+  }, []);
+
+  // ── Main Effect: Setup media + mediasoup ──────────────────────
   useEffect(() => {
     let isMounted = true;
 
     async function init() {
-      // 1. Get local media stream
+      // ────────────────────────────────────────────────────────
+      // STEP 1: Get local camera + microphone
+      // This is the same getUserMedia call as before.
+      // The stream goes into localStreamRef for recording.
+      // ────────────────────────────────────────────────────────
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           setMediaError("Media devices API not available (requires HTTPS or localhost). Please use ngrok or enable Chrome's insecure origins flag.");
@@ -278,97 +379,218 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         return;
       }
 
-      // 2. Connect to Socket.io server
+      // ────────────────────────────────────────────────────────
+      // STEP 2: Connect to the mediasoup server via Socket.io
+      // Unlike before (where we connected to the Next.js server),
+      // we now connect to the mediasoup Docker server on port 3000.
+      // ────────────────────────────────────────────────────────
+      // Connect to Mediasoup via Next.js proxy to avoid Mixed Content errors on HTTPS
       const socket = io(window.location.origin, {
+        path: "/mediasoup-socket/",
         transports: ["websocket", "polling"],
       });
       socketRef.current = socket;
 
-      socket.on("connect", () => {
-        console.log("[WebRTC] Socket connected:", socket.id);
-        // Join the room
-        socket.emit("join-room", room.id);
-      });
-
-      // ── When another user joins the room ──────────────────
-      // We are the existing user, so WE create the offer
-      socket.on("user-joined", async ({ socketId }: { socketId: string }) => {
-        console.log("[WebRTC] User joined, creating offer for:", socketId);
-        setRemoteSocketId(socketId);
-
-        const pc = createPeerConnection(socketId);
+      socket.on("connect", async () => {
+        console.log("[Mediasoup] Socket connected:", socket.id);
 
         try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit("offer", { offer, to: socketId });
-        } catch (err) {
-          console.error("[WebRTC] Error creating offer:", err);
-        }
-      });
+          // ──────────────────────────────────────────────────
+          // STEP 3: Join the room on the mediasoup server
+          // The server creates a Router for the room (if it
+          // doesn't exist) and sends back its RTP capabilities.
+          // ──────────────────────────────────────────────────
+          const joinResponse: any = await new Promise((resolve) => {
+            socket.emit("join-room", { roomId: room.id }, resolve);
+          });
 
-      // ── Receive an offer from the other peer ──────────────
-      socket.on("offer", async ({ offer, from }: { offer: RTCSessionDescriptionInit; from: string }) => {
-        console.log("[WebRTC] Received offer from:", from);
-        setRemoteSocketId(from);
-
-        const pc = createPeerConnection(from);
-
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit("answer", { answer, to: from });
-        } catch (err) {
-          console.error("[WebRTC] Error handling offer:", err);
-        }
-      });
-
-      // ── Receive an answer ─────────────────────────────────
-      socket.on("answer", async ({ answer }: { answer: RTCSessionDescriptionInit }) => {
-        console.log("[WebRTC] Received answer");
-        const pc = peerConnectionRef.current;
-        if (pc) {
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-          } catch (err) {
-            console.error("[WebRTC] Error setting remote description:", err);
+          if (joinResponse.error) {
+            console.error("[Mediasoup] join-room error:", joinResponse.error);
+            return;
           }
-        }
-      });
 
-      // ── Receive ICE candidate ─────────────────────────────
-      socket.on("ice-candidate", async ({ candidate }: { candidate: RTCIceCandidateInit }) => {
-        const pc = peerConnectionRef.current;
-        if (pc) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (err) {
-            console.error("[WebRTC] Error adding ICE candidate:", err);
+          const { rtpCapabilities } = joinResponse;
+
+          // ──────────────────────────────────────────────────
+          // STEP 4: Create the mediasoup Device
+          // The Device is like a "codec negotiator". It loads
+          // the server's RTP capabilities and figures out what
+          // codecs we can use for sending/receiving.
+          // ──────────────────────────────────────────────────
+          const device = new mediasoupClient.Device();
+          await device.load({ routerRtpCapabilities: rtpCapabilities });
+          deviceRef.current = device;
+          console.log("[Mediasoup] Device loaded. Can produce video:", device.canProduce("video"));
+
+          // ──────────────────────────────────────────────────
+          // STEP 5: Create Send Transport (upload pipe)
+          // This transport handles sending OUR camera+mic
+          // to the server. We ask the server to create the
+          // server-side transport, then create our local side.
+          // ──────────────────────────────────────────────────
+          const sendTransportResponse: any = await new Promise((resolve) => {
+            socket.emit("createWebRtcTransport", { sender: true }, resolve);
+          });
+
+          if (sendTransportResponse.error) {
+            console.error("[Mediasoup] Send transport error:", sendTransportResponse.error);
+            return;
           }
-        }
-      });
 
-      // ── User left ─────────────────────────────────────────
-      socket.on("user-left", ({ socketId }: { socketId: string }) => {
-        console.log("[WebRTC] User left:", socketId);
-        setConnectionStatus("disconnected");
-        setRemoteSocketId(null);
+          const sendTransport = device.createSendTransport(sendTransportResponse.params);
+          sendTransportRef.current = sendTransport;
 
-        // Clean up peer connection
-        if (peerConnectionRef.current) {
-          peerConnectionRef.current.close();
-          peerConnectionRef.current = null;
-        }
+          // When mediasoup needs to connect the transport (DTLS handshake),
+          // forward the parameters to the server
+          sendTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
+            socket.emit("transport-connect", {
+              transportId: sendTransport.id,
+              dtlsParameters,
+            }, (response: any) => {
+              if (response.error) {
+                errback(new Error(response.error));
+              } else {
+                callback();
+              }
+            });
+          });
 
-        // Clear remote video
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = null;
+          // When mediasoup wants to produce (send a track), tell the server
+          // so it can create a server-side Producer and return its ID
+          sendTransport.on("produce", ({ kind, rtpParameters }, callback, errback) => {
+            socket.emit("transport-produce", {
+              transportId: sendTransport.id,
+              kind,
+              rtpParameters,
+            }, (response: any) => {
+              if (response.error) {
+                errback(new Error(response.error));
+              } else {
+                // Give the server's producer ID back to mediasoup
+                callback({ id: response.id });
+              }
+            });
+          });
+
+          // ──────────────────────────────────────────────────
+          // STEP 6: Create Receive Transport (download pipe)
+          // This transport handles receiving OTHER peoples'
+          // streams from the server.
+          // ──────────────────────────────────────────────────
+          const recvTransportResponse: any = await new Promise((resolve) => {
+            socket.emit("createWebRtcTransport", { sender: false }, resolve);
+          });
+
+          if (recvTransportResponse.error) {
+            console.error("[Mediasoup] Recv transport error:", recvTransportResponse.error);
+            return;
+          }
+
+          const recvTransport = device.createRecvTransport(recvTransportResponse.params);
+          recvTransportRef.current = recvTransport;
+
+          // Same connect handler as send transport
+          recvTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
+            socket.emit("transport-connect", {
+              transportId: recvTransport.id,
+              dtlsParameters,
+            }, (response: any) => {
+              if (response.error) {
+                errback(new Error(response.error));
+              } else {
+                callback();
+              }
+            });
+          });
+
+          // ──────────────────────────────────────────────────
+          // STEP 7: Produce (send) our local tracks
+          // Take the video and audio tracks from getUserMedia
+          // and send them through the send transport.
+          // ──────────────────────────────────────────────────
+          const localStream = localStreamRef.current;
+          if (localStream) {
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+              const videoProducer = await sendTransport.produce({ track: videoTrack });
+              producersRef.current.push(videoProducer);
+              console.log("[Mediasoup] Video producer created:", videoProducer.id);
+            }
+
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+              const audioProducer = await sendTransport.produce({ track: audioTrack });
+              producersRef.current.push(audioProducer);
+              console.log("[Mediasoup] Audio producer created:", audioProducer.id);
+            }
+          }
+
+          // ──────────────────────────────────────────────────
+          // STEP 8: Consume existing producers in the room
+          // If other peers are already in the room when we join,
+          // the server gives us a list of their producers.
+          // We consume each one to see/hear them.
+          // ──────────────────────────────────────────────────
+          const existingProducers: ProducerInfo[] = await new Promise((resolve) => {
+            socket.emit("getProducers", resolve);
+          });
+
+          console.log(`[Mediasoup] Found ${existingProducers.length} existing producers`);
+
+          for (const producerInfo of existingProducers) {
+            await consumeProducer(socket, recvTransport, device, producerInfo);
+          }
+
+          // ──────────────────────────────────────────────────
+          // STEP 9: Listen for NEW producers
+          // When someone joins after us or starts a new track,
+          // the server broadcasts "new-producer". We consume it.
+          // ──────────────────────────────────────────────────
+          socket.on("new-producer", async (producerInfo: ProducerInfo) => {
+            console.log("[Mediasoup] New producer:", producerInfo);
+            if (deviceRef.current && recvTransportRef.current) {
+              await consumeProducer(
+                socket,
+                recvTransportRef.current,
+                deviceRef.current,
+                producerInfo,
+              );
+            }
+          });
+
+          // ──────────────────────────────────────────────────
+          // STEP 10: Listen for peers leaving
+          // When someone disconnects, remove their stream
+          // from our remoteStreams Map so their video disappears.
+          // ──────────────────────────────────────────────────
+          socket.on("peer-left", ({ socketId }: { socketId: string }) => {
+            console.log("[Mediasoup] Peer left:", socketId);
+
+            setRemoteStreams((prev) => {
+              const updated = new Map(prev);
+              // Stop all tracks before removing
+              const stream = updated.get(socketId);
+              if (stream) {
+                stream.getTracks().forEach((t) => t.stop());
+              }
+              updated.delete(socketId);
+
+              // If no remote peers left, set status to disconnected
+              if (updated.size === 0) {
+                setConnectionStatus("disconnected");
+              }
+
+              return updated;
+            });
+          });
+
+        } catch (err) {
+          console.error("[Mediasoup] Setup error:", err);
         }
       });
 
       // ────────────────────────────────────────────────────────
-      // RECORDING SOCKET EVENTS
+      // RECORDING SOCKET EVENTS (UNCHANGED from P2P version)
       // Both host and guest listen for these. The server generates
       // a sharedStartTime and sends it to everyone in the room.
       // Both sides then independently start their own MediaRecorder
@@ -406,9 +628,22 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         mediaRecorderRef.current.stop();
       }
 
-      // Close peer connection
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
+      // Close mediasoup producers
+      producersRef.current.forEach((p) => {
+        try { p.close(); } catch (_) { /* already closed */ }
+      });
+
+      // Close mediasoup consumers
+      consumersRef.current.forEach((c) => {
+        try { c.close(); } catch (_) { /* already closed */ }
+      });
+
+      // Close transports (this also cleans up server-side resources)
+      if (sendTransportRef.current) {
+        try { sendTransportRef.current.close(); } catch (_) { /* already closed */ }
+      }
+      if (recvTransportRef.current) {
+        try { recvTransportRef.current.close(); } catch (_) { /* already closed */ }
       }
 
       // Disconnect socket
@@ -416,9 +651,9 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         socketRef.current.disconnect();
       }
     };
-  }, [room.id, createPeerConnection, startLocalRecording, stopLocalRecording]);
+  }, [room.id, consumeProducer, startLocalRecording, stopLocalRecording]);
 
-  // ── Auto-LIVE on connect ─────────────────────────────────
+  // ── Auto-LIVE on connect (UNCHANGED from P2P version) ─────
   useEffect(() => {
     if (isHost && connectionStatus === "connected" && currentRoomStatus === "WAITING") {
       setCurrentRoomStatus("LIVE");
@@ -430,10 +665,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     }
   }, [isHost, connectionStatus, currentRoomStatus, room.id]);
 
-  // ── Poll for combined recording status ────────────────────
-  // Every 5 seconds, check if the server has finished combining
-  // all participant recordings into one video. Stop polling once
-  // the status is READY or FAILED.
+  // ── Poll for combined recording status (UNCHANGED from P2P version) ─
   useEffect(() => {
     // Only poll if there are recordings and status is not final
     if (room.recordings.length === 0) return;
@@ -463,7 +695,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     return () => clearInterval(pollInterval);
   }, [room.id, room.recordings.length, combineStatus]);
 
-  // ── End Session ─────────────────────────────────────────
+  // ── End Session (UNCHANGED from P2P version) ────────────────
   const handleEndSession = async () => {
     if (!confirm("Are you sure you want to end this session?")) return;
     
@@ -480,16 +712,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     }
   };
 
-  // ──────────────────────────────────────────────────────────
-  // HOST-ONLY button handlers
-  // When the host clicks Record, the host emits "start-recording"
-  // to the server. The server generates a sharedStartTime and
-  // broadcasts it back to BOTH host and guest via the
-  // "start-recording" event. So the host does NOT call
-  // startLocalRecording directly — it waits for the server's
-  // broadcast just like the guest does.
-  // Same pattern for Stop.
-  // ──────────────────────────────────────────────────────────
+  // ── HOST-ONLY button handlers (UNCHANGED from P2P version) ──
   const handleHostStartRecording = () => {
     if (!localStreamRef.current) {
       alert("Cannot start recording — camera/mic not available.");
@@ -508,19 +731,71 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
   };
 
   // ── Format seconds into MM:SS for the timer display ──────
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
-    const s = (seconds % 60).toString().padStart(2, "0");
+  function formatTime(ms: number) {
+    const totalSeconds = Math.floor(ms / 1000);
+    const m = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+    const s = (totalSeconds % 60).toString().padStart(2, "0");
     return `${m}:${s}`;
+  }
+
+  const RemoteVideo = ({ stream, socketId }: { stream: MediaStream, socketId: string }) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    useEffect(() => {
+      const el = videoRef.current;
+      if (el && el.srcObject !== stream) {
+        el.srcObject = stream;
+      }
+    }, [stream]);
+
+    // Ensure playback starts when tracks are added dynamically
+    useEffect(() => {
+      const el = videoRef.current;
+      if (!el) return;
+
+      const handleAddTrack = (e: MediaStreamTrackEvent) => {
+        console.log(`[RemoteVideo] Track added (${e.track.kind}) for peer ${socketId}`);
+        el.play().catch(err => {
+          if (err.name !== 'AbortError') console.error("[RemoteVideo] Play error:", err);
+        });
+      };
+
+      stream.addEventListener("addtrack", handleAddTrack);
+      // Also try to play immediately just in case
+      el.play().catch(err => {
+        if (err.name !== 'AbortError') console.error("[RemoteVideo] Initial play error:", err);
+      });
+
+      return () => stream.removeEventListener("addtrack", handleAddTrack);
+    }, [stream, socketId]);
+
+    return (
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        className="w-full rounded-xl border border-gray-700 bg-gray-800"
+      />
+    );
   };
 
   // ── Status indicator config ───────────────────────────────
   const statusConfig = {
-    waiting: { label: "Waiting for peer...", color: "bg-yellow-500", icon: "🟡" },
+    waiting: { label: "Waiting for participants...", color: "bg-yellow-500", icon: "🟡" },
     connected: { label: "Connected", color: "bg-green-500", icon: "🟢" },
     disconnected: { label: "Disconnected", color: "bg-red-500", icon: "🔴" },
   };
   const currentStatus = statusConfig[connectionStatus];
+
+  // ── Video grid layout ─────────────────────────────────────
+  // Total participants = 1 (you) + number of remote streams
+  const totalParticipants = 1 + remoteStreams.size;
+  // Pick a grid layout based on how many people are in the room
+  const gridCols =
+    totalParticipants === 1 ? "grid-cols-1" :
+    totalParticipants === 2 ? "grid-cols-1 md:grid-cols-2" :
+    totalParticipants === 3 ? "grid-cols-1 md:grid-cols-3" :
+    "grid-cols-1 md:grid-cols-2"; // 4+ people: 2 columns, wrapping
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -552,6 +827,10 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
               🎙 Guest
             </span>
           )}
+          {/* Participant count */}
+          <span className="bg-gray-700 text-gray-300 px-3 py-1 rounded-full text-xs font-semibold">
+            👥 {totalParticipants} participant{totalParticipants !== 1 ? "s" : ""}
+          </span>
         </div>
       </div>
 
@@ -603,9 +882,12 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
         </div>
       )}
 
-      {/* Video Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-        {/* Local Video */}
+      {/* ── Video Grid ───────────────────────────────────────
+           Dynamic grid that adapts based on number of participants.
+           1 person = full width, 2 = side by side, 3 = three columns,
+           4+ = 2 columns wrapping into rows. */}
+      <div className={`grid ${gridCols} gap-4 mb-8`}>
+        {/* Local Video (always first) */}
         <div className="relative">
           <video
             ref={localVideoRef}
@@ -619,24 +901,22 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
           </span>
         </div>
 
-        {/* Remote Video */}
-        <div className="relative">
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            className="w-full rounded-xl border border-gray-700 bg-gray-800"
-          />
-          {!remoteSocketId ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-gray-800 rounded-xl border border-gray-700">
-              <p className="text-gray-500 text-sm">Waiting for peer to join...</p>
+        {/* Remote Videos — one per participant */}
+        {remoteStreams.size === 0 && (
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-800 rounded-xl border border-gray-700 min-h-[200px]">
+              <p className="text-gray-500 text-sm">Waiting for participants to join...</p>
             </div>
-          ) : (
+          </div>
+        )}
+        {Array.from(remoteStreams.entries()).map(([socketId, stream]) => (
+          <div key={socketId} className="relative">
+            <RemoteVideo stream={stream} socketId={socketId} />
             <span className="absolute bottom-3 left-3 bg-black/60 px-2 py-1 rounded text-xs">
-              Peer {isHost ? "(Guest)" : "(Host)"}
+              Participant
             </span>
-          )}
-        </div>
+          </div>
+        ))}
       </div>
 
       {/* Invite Link — only show to host */}

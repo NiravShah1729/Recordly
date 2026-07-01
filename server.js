@@ -4,8 +4,8 @@ import { generate } from "selfsigned";
 import next from "next";
 import { Server as SocketServer } from "socket.io";
 import { networkInterfaces } from "os";
-
-const port = parseInt(process.env.PORT || "3000", 10);
+import httpProxy from "http-proxy";
+const port = parseInt(process.env.PORT || "3001", 10);
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev, hostname: "0.0.0.0", port });
 const handle = app.getRequestHandler();
@@ -17,7 +17,7 @@ app.prepare().then(async () => {
   if (dev) {
     try {
       console.log("> Generating self-signed certificate for local HTTPS...");
-      const pems = await generate([{ name: 'commonName', value: 'localhost' }], { days: 365, keySize: 2048 });
+      const pems = await generate([{ name: 'commonName', value: '10.1.75.133' }], { days: 365, keySize: 2048 });
       serverOptions = {
         key: pems.private,
         cert: pems.cert
@@ -138,9 +138,14 @@ app.prepare().then(async () => {
     });
   });
 
+  const proxy = httpProxy.createProxyServer({ ws: true });
+
   httpServer.on("upgrade", (req, socket, head) => {
     if (req.url && req.url.startsWith("/_next/")) {
       app.getUpgradeHandler()(req, socket, head);
+    } else if (req.url && req.url.startsWith("/mediasoup-socket/")) {
+      req.url = req.url.replace("/mediasoup-socket", "/socket.io");
+      proxy.ws(req, socket, head, { target: "http://127.0.0.1:3000" });
     }
   });
 

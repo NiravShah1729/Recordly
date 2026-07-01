@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  mediasoup-server:
+    build: .
+    container_name: mediasoup_sfu_container
+    ports:
+      - "3000:3000" # Socket.io Signaling Port
+      - "20000-20050:20000-20050/udp" # WebRTC media over UDP
+      - "20000-20050:20000-20050/tcp" # WebRTC fallback over TCP
+    environment:
+      - PORT=3000
+    volumes:
+      - .:/app
+      - /app/node_modules # Prevents local node_modules from overwriting container build

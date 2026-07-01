@@ -47,8 +47,9 @@ export async function processRecording(recordingId: string) {
       throw new Error("No body in S3 object");
     }
 
-    // 3. Extract Duration
+    // 3. Extract Duration & Check for Audio
     let duration = 0;
+    let hasAudio = false;
     await new Promise<void>((resolve, reject) => {
       ffmpeg.ffprobe(rawPath, (err, metadata) => {
         if (err) {
@@ -57,21 +58,29 @@ export async function processRecording(recordingId: string) {
         }
         const parsedDuration = Number(metadata?.format?.duration);
         duration = isNaN(parsedDuration) ? 0 : Math.floor(parsedDuration);
+        hasAudio = metadata?.streams?.some(s => s.codec_type === 'audio') || false;
         resolve();
       });
     });
 
-    // 4. Transcode to MP4 (compress)
-    console.log("[FFmpeg] Transcoding to MP4...");
+    // 4. Transcode to MP4 (compress and ensure audio exists)
+    console.log(`[FFmpeg] Transcoding to MP4... (hasAudio: ${hasAudio})`);
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(rawPath)
-        .output(mp4Path)
+      const cmd = ffmpeg(rawPath);
+      
+      if (!hasAudio) {
+        // If the raw recording has no audio track, inject a silent one
+        cmd.input("anullsrc=channel_layout=stereo:sample_rate=44100").inputFormat("lavfi");
+      }
+
+      cmd.output(mp4Path)
         .videoCodec("libx264")
         .addOptions(["-crf 28", "-preset fast"])
+        .outputOptions(hasAudio ? [] : ["-shortest"]) // Stop when video ends if generating infinite silent audio
         .on("end", () => resolve())
         .on("error", (err) => reject(err))
         .run();
-    })
+    });
 
     // 5. Extract Thumbnail
     console.log("[FFmpeg] Extracting thumbnail...");

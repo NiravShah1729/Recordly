@@ -56,8 +56,14 @@ export async function combineRecordings(roomId: string) {
     }
 
     // ── 3. Identify host vs guest recordings ────────────────
-    const hostRecording = room.recordings.find((r) => r.userId === room.hostId);
-    const guestRecording = room.recordings.find((r) => r.userId !== room.hostId);
+    // Sort recordings by createdAt descending to ensure we combine the latest ones
+    // in case there are multiple recordings from previous sessions in this room.
+    const sortedRecordings = [...room.recordings].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+    );
+
+    const hostRecording = sortedRecordings.find((r) => r.userId === room.hostId);
+    const guestRecording = sortedRecordings.find((r) => r.userId !== room.hostId);
 
     if (!hostRecording || !guestRecording) {
       throw new Error("Could not identify host and guest recordings");
