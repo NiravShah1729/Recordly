@@ -738,47 +738,6 @@ export default function RoomClient({ room, isHost, nextAuthUrl }: RoomClientProp
     return `${m}:${s}`;
   }
 
-  const RemoteVideo = ({ stream, socketId }: { stream: MediaStream, socketId: string }) => {
-    const videoRef = useRef<HTMLVideoElement>(null);
-
-    useEffect(() => {
-      const el = videoRef.current;
-      if (el && el.srcObject !== stream) {
-        el.srcObject = stream;
-      }
-    }, [stream]);
-
-    // Ensure playback starts when tracks are added dynamically
-    useEffect(() => {
-      const el = videoRef.current;
-      if (!el) return;
-
-      const handleAddTrack = (e: MediaStreamTrackEvent) => {
-        console.log(`[RemoteVideo] Track added (${e.track.kind}) for peer ${socketId}`);
-        el.play().catch(err => {
-          if (err.name !== 'AbortError') console.error("[RemoteVideo] Play error:", err);
-        });
-      };
-
-      stream.addEventListener("addtrack", handleAddTrack);
-      // Also try to play immediately just in case
-      el.play().catch(err => {
-        if (err.name !== 'AbortError') console.error("[RemoteVideo] Initial play error:", err);
-      });
-
-      return () => stream.removeEventListener("addtrack", handleAddTrack);
-    }, [stream, socketId]);
-
-    return (
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        className="w-full rounded-xl border border-gray-700 bg-gray-800"
-      />
-    );
-  };
-
   // ── Status indicator config ───────────────────────────────
   const statusConfig = {
     waiting: { label: "Waiting for participants...", color: "bg-yellow-500", icon: "🟡" },

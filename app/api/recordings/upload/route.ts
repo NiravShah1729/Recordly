@@ -82,6 +82,16 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Reset room's combine status to PENDING
+    if (roomId) {
+      await prisma.room.update({
+        where: { id: roomId },
+        data: {
+          combineStatus: "PENDING",
+        },
+      });
+    }
+
     // Fire and forget background processing
     import("@/lib/processRecording").then(({ processRecording }) => {
       processRecording(recording.id).catch((err) => {

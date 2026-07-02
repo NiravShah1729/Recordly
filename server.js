@@ -157,6 +157,10 @@ app.prepare().then(async () => {
     const nets = networkInterfaces();
     let networkIp = "";
     for (const name of Object.keys(nets)) {
+      // Skip virtual adapters (like WSL, Hyper-V, VMware) to find the actual Wi-Fi/Ethernet IP
+      if (name.toLowerCase().includes("veth") || name.toLowerCase().includes("virtual") || name.toLowerCase().includes("vmware")) {
+        continue;
+      }
       for (const net of nets[name]) {
         // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
         if (net.family === "IPv4" && !net.internal) {

@@ -31,6 +31,17 @@ export async function combineRecordings(roomId: string) {
 
   try {
     // ── 1. Mark room as PROCESSING ──────────────────────────
+    // Fetch first to check if already processing
+    const currentRoom = await prisma.room.findUnique({
+      where: { id: roomId },
+      select: { combineStatus: true }
+    });
+    
+    if (currentRoom?.combineStatus === "PROCESSING" || currentRoom?.combineStatus === "READY") {
+      console.log(`[Combine] Room ${roomId} already processing or ready (status: ${currentRoom.combineStatus}). Skipping.`);
+      return;
+    }
+
     await prisma.room.update({
       where: { id: roomId },
       data: { combineStatus: "PROCESSING" },
@@ -86,9 +97,10 @@ export async function combineRecordings(roomId: string) {
     if (!bucketName) throw new Error("Missing AWS_S3_BUCKET_NAME");
 
     const tempDir = os.tmpdir();
-    const hostPath = path.join(tempDir, `combine-host-${roomId}.mp4`);
-    const guestPath = path.join(tempDir, `combine-guest-${roomId}.mp4`);
-    const outputPath = path.join(tempDir, `combined-${roomId}.mp4`);
+    const uniqueId = Date.now().toString() + "-" + Math.floor(Math.random() * 1000);
+    const hostPath = path.join(tempDir, `combine-host-${roomId}-${uniqueId}.mp4`);
+    const guestPath = path.join(tempDir, `combine-guest-${roomId}-${uniqueId}.mp4`);
+    const outputPath = path.join(tempDir, `combined-${roomId}-${uniqueId}.mp4`);
 
     // Download host recording
     console.log(`[Combine] Downloading host recording: ${hostRecording.s3Key}`);
@@ -153,8 +165,8 @@ export async function combineRecordings(roomId: string) {
       // We use FFmpeg's complex filtergraph to handle both phases
       // and concatenate them in a single command.
 
-      const phase1Path = path.join(tempDir, `phase1-${roomId}.mp4`);
-      const phase2Path = path.join(tempDir, `phase2-${roomId}.mp4`);
+      const phase1Path = path.join(tempDir, `phase1-${roomId}-${uniqueId}.mp4`);
+      const phase2Path = path.join(tempDir, `phase2-${roomId}-${uniqueId}.mp4`);
 
       // Phase 1: Host full screen for the first guestAppearsAt seconds
       console.log(`[Combine] Phase 1: Host full-screen for ${guestAppearsAt}s`);
@@ -204,7 +216,7 @@ export async function combineRecordings(roomId: string) {
 
       // Concatenate Phase 1 + Phase 2 using the concat demuxer
       console.log(`[Combine] Concatenating Phase 1 + Phase 2`);
-      const concatListPath = path.join(tempDir, `concat-${roomId}.txt`);
+      const concatListPath = path.join(tempDir, `concat-${roomId}-${uniqueId}.txt`);
       await fs.promises.writeFile(
         concatListPath,
         `file '${phase1Path.replace(/\\/g, "/")}'\nfile '${phase2Path.replace(/\\/g, "/")}'`
