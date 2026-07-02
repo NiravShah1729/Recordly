@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Button from "@/components/ui/Button";
 
 function RecordPageInner() {
   const searchParams = useSearchParams();
@@ -45,7 +46,9 @@ function RecordPageInner() {
 
         setHasPermission(true);
       } catch (err) {
-        setError("Could not access camera or microphone. Please allow permissions.");
+        setError(
+          "Could not access camera or microphone. Please allow permissions."
+        );
         console.error(err);
       }
     }
@@ -101,11 +104,13 @@ function RecordPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-8">
-      <h1 className="text-3xl font-bold mb-6">Record</h1>
+    <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)] text-[var(--text-primary)] flex flex-col items-center justify-center p-8">
+      <h1 className="text-2xl font-semibold mb-6">Record</h1>
 
       {error && (
-        <p className="text-red-400 mb-4">{error}</p>
+        <div className="bg-red-500/10 border border-red-500/20 rounded-[var(--radius-sm)] p-4 mb-4 max-w-2xl w-full">
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
       )}
 
       <video
@@ -113,50 +118,43 @@ function RecordPageInner() {
         autoPlay
         muted
         playsInline
-        className="w-full max-w-2xl rounded-xl border border-gray-700"
+        className="w-full max-w-2xl rounded-[var(--radius)] border border-[var(--border)] bg-black"
       />
 
       {hasPermission && (
-        <div className="mt-6 flex gap-4">
+        <div className="mt-6 flex gap-3">
           {!isRecording ? (
-            <button
-              onClick={startRecording}
-              className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold"
-            >
-              ⏺ Start Recording
-            </button>
+            <Button variant="danger" size="lg" onClick={startRecording}>
+              Start Recording
+            </Button>
           ) : (
-            <button
-              onClick={stopRecording}
-              className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-semibold"
-            >
-              ⏹ Stop Recording
-            </button>
+            <Button variant="secondary" size="lg" onClick={stopRecording}>
+              Stop Recording
+            </Button>
           )}
         </div>
       )}
 
       {downloadUrl && (
-        <div className="mt-6 flex flex-col items-center gap-3">
-          <p className="text-green-400 font-semibold">✅ Recording complete!</p>
+        <div className="mt-6 flex flex-col items-center gap-3 w-full max-w-2xl">
+          <p className="text-sm text-green-400 font-medium">
+            Recording complete
+          </p>
           <video
             src={downloadUrl}
             controls
-            className="w-full max-w-2xl rounded-xl border border-gray-700"
+            className="w-full rounded-[var(--radius)] border border-[var(--border)] bg-black"
           />
-          <a
-            href={downloadUrl}
-            download="recording.webm"
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold"
-          >
-            ⬇ Download Recording
-          </a>
-          <button
-            onClick={saveToServer}
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-semibold"
-          >
-            ☁ Save to Server
-          </button>
+          <div className="flex gap-3">
+            <a href={downloadUrl} download="recording.webm">
+              <Button variant="primary" size="md">
+                Download
+              </Button>
+            </a>
+            <Button variant="primary" size="md" onClick={saveToServer}>
+              Save to Server
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -165,7 +163,13 @@ function RecordPageInner() {
 
 export default function RecordPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)] text-[var(--text-secondary)] flex items-center justify-center">
+          Loading...
+        </div>
+      }
+    >
       <RecordPageInner />
     </Suspense>
   );

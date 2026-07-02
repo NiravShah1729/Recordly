@@ -1,12 +1,20 @@
 "use client";
 
+import { useState } from "react";
+import Button from "@/components/ui/Button";
+
 export default function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <button
-      onClick={() => navigator.clipboard.writeText(text)}
-      className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg text-sm"
-    >
-      Copy
-    </button>
+    <Button variant="secondary" size="sm" onClick={handleCopy}>
+      {copied ? "Copied!" : "Copy"}
+    </Button>
   );
 }

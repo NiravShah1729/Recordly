@@ -114,6 +114,7 @@ export default async function RoomPage({ params }: Props) {
       room={serializedRoom}
       isHost={isHost}
       nextAuthUrl={process.env.NEXTAUTH_URL || "http://localhost:3000"}
+      currentUserName={session.user.name || session.user.email}
     />
   );
 }

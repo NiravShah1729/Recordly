@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Card from "@/components/ui/Card";
+import Input from "@/components/ui/Input";
+import Button from "@/components/ui/Button";
 
 export default function NewRoomPage() {
   const router = useRouter();
@@ -36,45 +39,43 @@ export default function NewRoomPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-8">
-      <div className="bg-gray-800 rounded-xl p-8 w-full max-w-md">
-        <h1 className="text-2xl font-bold mb-6">Create a New Room</h1>
+    <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)] flex flex-col items-center justify-center p-8">
+      <div className="w-full max-w-md">
+        <h1 className="text-2xl font-semibold text-[var(--text-primary)] mb-6">
+          Create a New Room
+        </h1>
 
-        {error && (
-          <p className="text-red-400 mb-4">{error}</p>
-        )}
-
-        <div className="flex flex-col gap-4">
-          <div>
-            <label className="text-sm text-gray-400 mb-1 block">Room Name</label>
-            <input
+        <Card padding="lg">
+          <div className="flex flex-col gap-4">
+            <Input
+              label="Room Name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Interview with John"
-              className="w-full bg-gray-700 text-white px-4 py-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              error={error || undefined}
             />
-          </div>
 
-          <div>
-            <label className="text-sm text-gray-400 mb-1 block">Description (optional)</label>
-            <input
+            <Input
+              label="Description (optional)"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="e.g. Podcast episode 12"
-              className="w-full bg-gray-700 text-white px-4 py-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
             />
-          </div>
 
-          <button
-            onClick={handleCreate}
-            disabled={loading}
-            className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold mt-2 disabled:opacity-50"
-          >
-            {loading ? "Creating..." : "Create Room"}
-          </button>
-        </div>
+            <Button
+              variant="primary"
+              size="lg"
+              onClick={handleCreate}
+              loading={loading}
+              disabled={!name}
+              className="w-full mt-2"
+            >
+              Create Room
+            </Button>
+          </div>
+        </Card>
       </div>
     </div>
   );

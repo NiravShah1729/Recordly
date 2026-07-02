@@ -2,58 +2,68 @@
 
 import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
+import { usePathname } from "next/navigation";
+import Button from "@/components/ui/Button";
 
 export default function Navbar() {
   const { data: session } = useSession();
+  const pathname = usePathname();
+
+  const navLinks = [
+    { href: "/dashboard", label: "Dashboard" },
+    { href: "/recordings", label: "Recordings" },
+  ];
 
   return (
-    <nav className="bg-gray-900 border-b border-gray-700 px-8 py-4 flex items-center justify-between">
+    <nav className="bg-[var(--bg-primary)] px-6 py-4 flex items-center justify-between sticky top-0 z-50">
       {/* Logo */}
-      <Link href="/" className="text-white text-xl font-bold">
-        🎙 Recordly
+      <Link
+        href="/"
+        className="text-[var(--text-primary)] text-lg font-semibold tracking-tight"
+      >
+        Recordly
       </Link>
 
-      {/* Links */}
+      {/* Nav Links */}
       {session && (
-        <div className="flex items-center gap-6">
-          <Link
-            href="/dashboard"
-            className="text-gray-300 hover:text-white text-sm"
-          >
-            Dashboard
-          </Link>
-          <Link
-            href="/record"
-            className="text-gray-300 hover:text-white text-sm"
-          >
-            Record
-          </Link>
-          <Link
-            href="/recordings"
-            className="text-gray-300 hover:text-white text-sm"
-          >
-            My Recordings
-          </Link>
+        <div className="flex items-center gap-1">
+          {navLinks.map((link) => {
+            const isActive = pathname === link.href;
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`
+                  px-3 py-1.5 rounded-[var(--radius-sm)] text-sm transition-colors
+                  ${
+                    isActive
+                      ? "text-[var(--text-primary)] bg-[var(--bg-tertiary)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                  }
+                `}
+              >
+                {link.label}
+              </Link>
+            );
+          })}
         </div>
       )}
 
-      {/* User + Sign out */}
+      {/* User Section */}
       {session ? (
-        <div className="flex items-center gap-4">
-          <span className="text-gray-400 text-sm">{session.user?.email}</span>
-          <button
-            onClick={() => signOut()}
-            className="bg-gray-700 hover:bg-gray-600 text-white text-sm px-4 py-2 rounded-lg"
-          >
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-[var(--text-secondary)]">
+            {session.user?.name || session.user?.email}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => signOut()}>
             Sign Out
-          </button>
+          </Button>
         </div>
       ) : (
-        <Link
-          href="/signin"
-          className="text-gray-300 hover:text-white text-sm"
-        >
-          Sign In
+        <Link href="/auth/signin">
+          <Button variant="ghost" size="sm">
+            Sign In
+          </Button>
         </Link>
       )}
     </nav>

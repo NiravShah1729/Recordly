@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import { getPresignedUrl } from "@/lib/s3";
+import Link from "next/link";
 import AutoRefresh from "./AutoRefresh";
 
 export default async function RecordingsPage() {
@@ -20,193 +20,140 @@ export default async function RecordingsPage() {
     redirect("/");
   }
 
-  const recordings = await prisma.recording.findMany({
+  // Fetch all rooms where the user is host or participant, that have recordings
+  const rooms = await prisma.room.findMany({
     where: {
-      OR: [
-        { userId: user.id },
-        { room: { participants: { some: { id: user.id } } } },
-        { room: { hostId: user.id } }
-      ]
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  // Fetch rooms where the user is host or participant and a combined video exists
-  const combinedRooms = await prisma.room.findMany({
-    where: {
-      combineStatus: "READY",
-      combinedS3Key: { not: null },
       OR: [
         { hostId: user.id },
         { participants: { some: { id: user.id } } },
       ],
     },
+    include: {
+      recordings: {
+        orderBy: { createdAt: "desc" },
+        take: 1, // just need the latest for the "Last recording" date
+        select: { createdAt: true, status: true },
+      },
+      _count: {
+        select: { recordings: true },
+      },
+    },
     orderBy: { updatedAt: "desc" },
   });
 
-  // Generate presigned URLs for combined recordings
-  const combinedWithUrls = await Promise.all(
-    combinedRooms.map(async (room) => {
-      let presignedUrl = null;
-      try {
-        if (room.combinedS3Key) {
-          presignedUrl = await getPresignedUrl(room.combinedS3Key);
-        }
-      } catch (error) {
-        console.error("Failed to generate presigned URL for combined", room.id, error);
-      }
-      return {
-        ...room,
-        displayUrl: presignedUrl || room.combinedUrl,
-      };
-    })
+  // Filter to only rooms that have at least one recording
+  const roomsWithRecordings = rooms.filter((r) => r._count.recordings > 0);
+
+  // Check if any recording is still processing (for auto-refresh)
+  const isAnyProcessing = roomsWithRecordings.some((r) =>
+    r.recordings.some(
+      (rec) => rec.status === "UPLOADING" || rec.status === "PROCESSING"
+    )
   );
 
-  const recordingsWithPresignedUrls = await Promise.all(
-    recordings.map(async (recording) => {
-      let presignedUrl = null;
-      try {
-        if (recording.s3Key) {
-          presignedUrl = await getPresignedUrl(recording.s3Key);
-        }
-      } catch (error) {
-        console.error("Failed to generate presigned URL for", recording.id, error);
-      }
-      return {
-        ...recording,
-        displayUrl: presignedUrl || recording.cdnUrl || `/recordings/${recording.fileName}`,
-      };
-    })
-  );
+  function formatRelativeDate(date: Date): string {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  const isAnyProcessing = recordingsWithPresignedUrls.some(
-    (r) => r.status === "UPLOADING" || r.status === "PROCESSING"
-  );
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+    return date.toLocaleDateString();
+  }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-8">
-      <h1 className="text-3xl font-bold mb-8">My Recordings</h1>
+    <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)]">
+      <div className="max-w-4xl mx-auto px-6 py-8">
+        <AutoRefresh isProcessing={isAnyProcessing} />
 
-      {recordingsWithPresignedUrls.length === 0 ? (
-        <p className="text-gray-400">No recordings yet. Go record something!</p>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <AutoRefresh isProcessing={isAnyProcessing} />
-          {recordingsWithPresignedUrls.map((recording) => (
-            <div
-              key={recording.id}
-              className="bg-gray-800 rounded-xl p-4 flex flex-col gap-3"
-            >
-              <div className="flex items-center justify-between">
-                <span className={`px-2 py-1 text-xs font-bold rounded ${
-                  recording.status === "READY" ? "bg-green-600 text-green-100" :
-                  recording.status === "FAILED" ? "bg-red-600 text-red-100" :
-                  "bg-yellow-600 text-yellow-100 animate-pulse"
-                }`}>
-                  {recording.status}
-                </span>
-                {recording.duration && (
-                  <span className="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded">
-                    {Math.floor(recording.duration / 60)}:{(recording.duration % 60).toString().padStart(2, '0')}
-                  </span>
-                )}
-              </div>
-              
-              {recording.status === "READY" ? (
-                <video
-                  src={recording.displayUrl}
-                  poster={recording.thumbnailUrl || undefined}
-                  controls
-                  className="w-full rounded-lg border border-gray-700"
-                />
-              ) : (
-                <div className="w-full aspect-video bg-gray-700 rounded-lg flex items-center justify-center border border-gray-600">
-                  <span className="text-gray-400 text-sm">Video Processing...</span>
-                </div>
-              )}
+        <h1 className="text-2xl font-semibold text-[var(--text-primary)] mb-6">
+          Recordings
+        </h1>
 
-              <p className="text-sm text-gray-400">
-                {new Date(recording.createdAt).toLocaleString()}
-              </p>
-              
-              {recording.status === "READY" && (
-                <a
-                  href={recording.displayUrl}
-                  download={recording.fileName}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-center px-4 py-2 rounded-lg text-sm font-semibold mt-auto"
-                >
-                  ⬇ Download / View MP4
-                </a>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Combined Recordings Section ──────────────────────── */}
-      {combinedWithUrls.length > 0 && (
-        <div className="mt-12">
-          <h2 className="text-2xl font-bold mb-6">🎬 Combined Recordings</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {combinedWithUrls.map((room) => (
-              <div
-                key={room.id}
-                className="bg-gray-800 rounded-xl p-4 flex flex-col gap-3"
+        {roomsWithRecordings.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-12 h-12 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center mb-4">
+              <svg
+                className="w-6 h-6 text-[var(--text-tertiary)]"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
               >
-                <div className="flex items-center justify-between">
-                  <span className="px-2 py-1 text-xs font-bold rounded bg-green-600 text-green-100">
-                    COMBINED
-                  </span>
-                </div>
-
-                {room.displayUrl ? (
-                  <video
-                    src={room.displayUrl}
-                    controls
-                    className="w-full rounded-lg border border-gray-700"
-                  />
-                ) : (
-                  <div className="w-full aspect-video bg-gray-700 rounded-lg flex items-center justify-center border border-gray-600">
-                    <span className="text-gray-400 text-sm">URL unavailable</span>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"
+                />
+              </svg>
+            </div>
+            <h3 className="text-base font-medium text-[var(--text-primary)] mb-1">
+              No recordings yet
+            </h3>
+            <p className="text-sm text-[var(--text-secondary)] max-w-sm mb-6">
+              Start a recording session in a room and your recordings will
+              appear here.
+            </p>
+            <Link
+              href="/rooms/new"
+              className="bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-white px-4 py-2.5 rounded-[var(--radius-sm)] text-sm font-medium transition-colors border border-[var(--border)]"
+            >
+              Create a Room
+            </Link>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {roomsWithRecordings.map((room) => (
+              <Link
+                key={room.id}
+                href={`/recordings/${room.id}`}
+                className="block"
+              >
+                <div className="bg-[var(--card-bg)] border border-[var(--border)] rounded-[var(--radius)] p-5 hover:border-[var(--border-hover)] transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-medium text-[var(--text-primary)]">
+                        {room.name}
+                      </h3>
+                      <div className="flex items-center gap-3 mt-1">
+                        <span className="text-sm text-[var(--text-secondary)]">
+                          {room._count.recordings} recording
+                          {room._count.recordings !== 1 ? "s" : ""}
+                        </span>
+                        {room.recordings[0] && (
+                          <>
+                            <span className="text-[var(--text-tertiary)]">
+                              ·
+                            </span>
+                            <span className="text-sm text-[var(--text-tertiary)]">
+                              Last recording:{" "}
+                              {formatRelativeDate(room.recordings[0].createdAt)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <svg
+                      className="w-5 h-5 text-[var(--text-tertiary)]"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="m8.25 4.5 7.5 7.5-7.5 7.5"
+                      />
+                    </svg>
                   </div>
-                )}
-
-                <div>
-                  <p className="text-sm font-semibold">{room.name}</p>
-                  <p className="text-xs text-gray-500">
-                    Side-by-side view of all participants
-                  </p>
-                  <p className="text-sm text-gray-400" suppressHydrationWarning>
-                    {new Date(room.updatedAt).toLocaleString()}
-                  </p>
                 </div>
-
-                {room.displayUrl && (
-                  <a
-                    href={room.displayUrl}
-                    download={`${room.name}-combined.mp4`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="bg-green-600 hover:bg-green-700 text-white text-center px-4 py-2 rounded-lg text-sm font-semibold mt-auto"
-                  >
-                    ⬇ Download Combined
-                  </a>
-                )}
-              </div>
+              </Link>
             ))}
           </div>
-        </div>
-      )}
-
-      <div className="mt-8">
-        <a
-          href="/record"
-          className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold"
-        >
-          ⏺ New Recording
-        </a>
+        )}
       </div>
     </div>
   );

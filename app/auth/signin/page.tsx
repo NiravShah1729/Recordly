@@ -1,16 +1,17 @@
-// src/app/auth/signin/page.tsx
 "use client";
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Input from "@/components/ui/Input";
+import Button from "@/components/ui/Button";
 
 export default function SignInPage() {
   const router = useRouter();
-  const [email,   setEmail]   = useState("");
-  const [name,    setName]    = useState("");
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState("");
+  const [error, setError] = useState("");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,60 +34,49 @@ export default function SignInPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+    <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Recordly</h1>
-          <p className="text-gray-400">Enter your email to sign in or create an account</p>
+          <h1 className="text-2xl font-semibold text-[var(--text-primary)] mb-2">
+            Sign in to Recordly
+          </h1>
+          <p className="text-sm text-[var(--text-secondary)]">
+            Enter your email to sign in or create an account
+          </p>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="bg-gray-900 rounded-2xl p-8 space-y-4 border border-gray-800"
-        >
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Your Name</label>
-            <input
+        <div className="w-full max-w-md bg-[var(--bg-secondary)] shadow-[var(--shadow-elevated)] rounded-[var(--radius-lg)] p-8 md:p-10">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <Input
+              label="Your Name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Nirav"
-              className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 
-                         border border-gray-700 focus:border-indigo-500 
-                         focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
-          </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Email Address</label>
-            <input
+            <Input
+              label="Email Address"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
               required
-              className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 
-                         border border-gray-700 focus:border-indigo-500 
-                         focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              error={error || undefined}
             />
-          </div>
 
-          {error && (
-            <p className="text-red-400 text-sm">{error}</p>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading || !email}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900
-                       disabled:cursor-not-allowed text-white font-semibold rounded-lg 
-                       px-4 py-3 transition-colors"
-          >
-            {loading ? "Signing in..." : "Continue with Email →"}
-          </button>
-        </form>
-
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              loading={loading}
+              disabled={!email}
+              className="w-full mt-2"
+            >
+              Continue with Email
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   );
