@@ -662,7 +662,13 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
         socketRef.current.disconnect();
       }
     };
-  }, [room.id, consumeProducer, startLocalRecording, stopLocalRecording]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    room.id,
+    showDeviceCheck,
+    selectedDevices.videoDeviceId,
+    selectedDevices.audioDeviceId
+  ]);
 
   // ── Auto-LIVE on connect (UNCHANGED from P2P version) ─────
   useEffect(() => {

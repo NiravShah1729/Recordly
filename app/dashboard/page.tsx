@@ -20,9 +20,12 @@ type Room = {
 
 type Recording = {
   id: string;
-  filename: string;
+  fileName: string;
   createdAt: string;
   status: string;
+  duration?: number | null;
+  thumbnailUrl?: string | null;
+  room?: { name: string } | null;
 };
 
 export default function DashboardPage() {
@@ -48,12 +51,12 @@ export default function DashboardPage() {
         setLoadingRooms(false);
       });
 
-    fetch("/api/recordings")
-      .then((r) => r.json())
-      .then((data) => {
-        setRecordings(Array.isArray(data) ? data.slice(0, 3) : []);
-        setLoadingRecs(false);
-      });
+      fetch("/api/recordings")
+        .then((r) => r.json())
+        .then((data) => {
+          setRecordings(Array.isArray(data) ? data.slice(0, 5) : []);
+          setLoadingRecs(false);
+        });
   }, [status]);
 
   if (status === "loading") {
@@ -63,6 +66,8 @@ export default function DashboardPage() {
       </div>
     );
   }
+
+  const liveRooms = rooms.filter((r) => r.status === "LIVE");
 
   return (
     <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)]">
@@ -98,7 +103,7 @@ export default function DashboardPage() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-medium text-[var(--text-primary)]">
-              Your Rooms
+              Live Rooms
             </h2>
             <Link
               href="/rooms/new"
@@ -112,16 +117,16 @@ export default function DashboardPage() {
             <p className="text-[var(--text-tertiary)] text-sm">
               Loading rooms...
             </p>
-          ) : rooms.length === 0 ? (
+          ) : liveRooms.length === 0 ? (
             <EmptyState
-              title="No rooms yet"
-              description="Create a room to start recording with guests."
-              actionLabel="Create your first room"
+              title="No live rooms"
+              description="You don't have any active rooms right now."
+              actionLabel="Create a new room"
               actionHref="/rooms/new"
             />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
-              {rooms.map((room) => (
+              {liveRooms.map((room) => (
                 <RoomCard key={room.id} room={room} />
               ))}
             </div>
@@ -130,16 +135,10 @@ export default function DashboardPage() {
 
         {/* Recent Recordings */}
         <section>
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4">
             <h2 className="text-base font-medium text-[var(--text-primary)]">
               Recent Recordings
             </h2>
-            <Link
-              href="/recordings"
-              className="text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-            >
-              View all
-            </Link>
           </div>
 
           {loadingRecs ? (
@@ -151,21 +150,64 @@ export default function DashboardPage() {
               No recordings yet.
             </p>
           ) : (
-            <ul className="space-y-2">
-              {recordings.map((rec) => (
-                <li
-                  key={rec.id}
-                  className="flex items-center justify-between bg-[var(--card-bg)] border border-[var(--border)] rounded-[var(--radius-sm)] px-4 py-3"
-                >
-                  <span className="text-sm text-[var(--text-primary)] truncate">
-                    {rec.filename}
-                  </span>
-                  <span className="text-xs text-[var(--text-tertiary)] ml-4 shrink-0">
-                    {new Date(rec.createdAt).toLocaleDateString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {recordings.map((rec) => (
+                  <div
+                    key={rec.id}
+                    className="flex flex-col group cursor-pointer"
+                  >
+                    {/* Thumbnail Area */}
+                    <div className="relative aspect-video bg-[var(--bg-secondary)] rounded-xl overflow-hidden mb-3 border border-transparent group-hover:border-[var(--border-hover)] transition-colors shadow-[var(--shadow-subtle)]">
+                      {rec.thumbnailUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={rec.thumbnailUrl} alt={rec.fileName} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-[var(--bg-secondary)]">
+                          <svg className="w-8 h-8 text-[var(--text-tertiary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                      )}
+                      {/* Duration Pill */}
+                      <div className="absolute bottom-2 right-2 bg-black/80 backdrop-blur-md px-1.5 py-0.5 rounded text-[10px] font-medium text-white tracking-wider">
+                        {rec.duration ? `${Math.floor(rec.duration / 60).toString().padStart(2, '0')}:${(rec.duration % 60).toString().padStart(2, '0')}` : "00:00"}
+                      </div>
+                    </div>
+
+                    {/* Meta Area */}
+                    <div className="flex items-start justify-between">
+                      <div className="min-w-0 pr-2">
+                        <h3 className="text-sm font-medium text-[var(--text-primary)] truncate mb-1">
+                          {rec.room?.name || rec.fileName || "Untitled Recording"}
+                        </h3>
+                        <p className="text-[11px] text-[var(--text-tertiary)] mb-1.5">
+                          Recorded {new Date(rec.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                          </svg>
+                          <span className="truncate">{rec.room?.name || "No Room"}</span>
+                        </div>
+                      </div>
+                      <button className="text-[var(--text-tertiary)] hover:text-white p-1 rounded transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-center pt-2">
+                <Link href="/recordings">
+                  <Button variant="secondary" className="px-6 rounded-full text-sm font-medium border border-[var(--border)] bg-transparent hover:bg-[var(--bg-tertiary)]">
+                    Show more
+                  </Button>
+                </Link>
+              </div>
+            </div>
           )}
         </section>
       </div>

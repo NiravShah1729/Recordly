@@ -26,6 +26,11 @@ export async function GET(req: NextRequest) {
         { room: { hostId: user.id } }
       ]
     },
+    include: {
+      room: {
+        select: { name: true }
+      }
+    },
     orderBy: { createdAt: "desc" },
   });
 
