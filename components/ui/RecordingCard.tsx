@@ -66,7 +66,7 @@ export default function RecordingCard({
               {recording.userName}
             </p>
           )}
-          <p className="text-xs text-[var(--text-tertiary)]">
+          <p className="text-xs text-[var(--text-tertiary)]" suppressHydrationWarning>
             {new Date(recording.createdAt).toLocaleString()}
           </p>
         </div>
