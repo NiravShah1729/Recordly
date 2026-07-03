@@ -146,10 +146,25 @@ io.on('connection', (socket) => {
       }
 
       const transport = await room.router.createWebRtcTransport({
-        listenIps: [{ ip: '0.0.0.0', announcedIp: process.env.ANNOUNCED_IP || '192.168.1.18' }],
+        listenIps: [{ ip: '0.0.0.0', announcedIp: process.env.ANNOUNCED_IP || '10.1.75.133' }],
         enableUdp: true,
         enableTcp: true,
         preferUdp: true,
+      });
+
+      // DEBUG: Log transport details
+      console.log(`✅ Transport created for peer ${socket.id} sender:${sender}`);
+      console.log(`   announcedIp: ${process.env.ANNOUNCED_IP || '10.1.75.133'}`);
+      console.log(`   ICE candidates:`, JSON.stringify(transport.iceCandidates));
+      console.log(`   tuple:`, JSON.stringify(transport.tuple));
+
+      // Listen for transport state changes
+      transport.on('dtlsstatechange', (dtlsState) => {
+        console.log(`🔒 Transport ${transport.id} DTLS state: ${dtlsState}`);
+      });
+
+      transport.on('icestatechange', (iceState) => {
+        console.log(`🧊 Transport ${transport.id} ICE state: ${iceState}`);
       });
 
       // Store transport in peer's transports Map
@@ -164,8 +179,6 @@ io.on('connection', (socket) => {
           sender, // pass back so browser knows which transport this is
         }
       });
-
-      console.log(`✅ Transport created for peer ${socket.id} sender:${sender}`);
     } catch (error) {
       callback({ error: error.message });
     }
@@ -323,6 +336,14 @@ io.on('connection', (socket) => {
     if (currentRoomId) {
       console.log(`⏹ stop-recording in room ${currentRoomId}`);
       socket.to(currentRoomId).emit('stop-recording');
+    }
+  });
+
+  socket.on('end-session', () => {
+    if (currentRoomId) {
+      console.log(`🛑 end-session triggered for room ${currentRoomId}`);
+      // Broadcast to all other peers that the session has ended
+      socket.to(currentRoomId).emit('session-ended');
     }
   });
 

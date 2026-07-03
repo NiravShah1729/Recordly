@@ -5,7 +5,8 @@ import { io, Socket } from "socket.io-client";
 import * as mediasoupClient from "mediasoup-client";
 import type { types as mediasoupTypes } from "mediasoup-client";
 import Link from "next/link";
-import CopyButton from "@/components/CopyButton/index";
+import  CopyButton  from "@/components/CopyButton";
+import { InviteDialog } from "@/components/ui/InviteDialog";
 import Button from "@/components/ui/Button";
 import StatusBadge from "@/components/ui/StatusBadge";
 import DeviceCheckDialog from "@/components/DeviceCheck/DeviceCheckDialog";
@@ -47,7 +48,7 @@ const RemoteVideo = ({ stream, socketId }: { stream: MediaStream, socketId: stri
       ref={videoRef}
       autoPlay
       playsInline
-      className="w-full rounded-xl border border-gray-700 bg-gray-800"
+      className="w-full h-full object-cover"
     />
   );
 };
@@ -325,16 +326,16 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
         socket.emit("consumer-resume", { consumerId: consumer.id }, () => resolve());
       });
 
-      // Add this track to the remote peer's MediaStream.
-      // If this is the first track from this peer, create a new MediaStream.
-      // If it's the second (e.g. audio after video), add to the existing one.
       setRemoteStreams((prev) => {
         const updated = new Map(prev);
         const existingStream = updated.get(socketId);
+        
         if (existingStream) {
-          // Peer already has a stream (e.g. we got video, now getting audio)
-          // We mutate the existing stream. The RemoteVideo component will handle the rest.
-          existingStream.addTrack(consumer.track);
+          // CRITICAL FIX: Create a NEW MediaStream instead of mutating the existing one.
+          // Mutating a MediaStream doesn't change its reference, so React and the <video> 
+          // element might not detect the new track (e.g. when audio is added after video).
+          const newStream = new MediaStream([...existingStream.getTracks(), consumer.track]);
+          updated.set(socketId, newStream);
         } else {
           // First track from this peer — create new stream
           updated.set(socketId, new MediaStream([consumer.track]));
@@ -537,25 +538,8 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
           }
 
           // ──────────────────────────────────────────────────
-          // STEP 8: Consume existing producers in the room
-          // If other peers are already in the room when we join,
-          // the server gives us a list of their producers.
-          // We consume each one to see/hear them.
-          // ──────────────────────────────────────────────────
-          const existingProducers: ProducerInfo[] = await new Promise((resolve) => {
-            socket.emit("getProducers", resolve);
-          });
-
-          console.log(`[Mediasoup] Found ${existingProducers.length} existing producers`);
-
-          for (const producerInfo of existingProducers) {
-            await consumeProducer(socket, recvTransport, device, producerInfo);
-          }
-
-          // ──────────────────────────────────────────────────
-          // STEP 9: Listen for NEW producers
-          // When someone joins after us or starts a new track,
-          // the server broadcasts "new-producer". We consume it.
+          // STEP 8: Listen for NEW producers and peers leaving
+          // (Register these BEFORE getting existing producers to avoid race conditions)
           // ──────────────────────────────────────────────────
           socket.on("new-producer", async (producerInfo: ProducerInfo) => {
             console.log("[Mediasoup] New producer:", producerInfo);
@@ -569,31 +553,41 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
             }
           });
 
-          // ──────────────────────────────────────────────────
-          // STEP 10: Listen for peers leaving
-          // When someone disconnects, remove their stream
-          // from our remoteStreams Map so their video disappears.
-          // ──────────────────────────────────────────────────
           socket.on("peer-left", ({ socketId }: { socketId: string }) => {
             console.log("[Mediasoup] Peer left:", socketId);
-
             setRemoteStreams((prev) => {
               const updated = new Map(prev);
-              // Stop all tracks before removing
               const stream = updated.get(socketId);
               if (stream) {
                 stream.getTracks().forEach((t) => t.stop());
               }
               updated.delete(socketId);
-
-              // If no remote peers left, set status to disconnected
-              if (updated.size === 0) {
-                setConnectionStatus("disconnected");
-              }
-
+              if (updated.size === 0) setConnectionStatus("disconnected");
               return updated;
             });
           });
+
+          socket.on("session-ended", () => {
+            console.log("[Mediasoup] Host ended the session.");
+            alert("The host has ended the session.");
+            localStreamRef.current?.getTracks().forEach((t) => t.stop());
+            router.push('/dashboard');
+          });
+
+          // ──────────────────────────────────────────────────
+          // STEP 9: Consume existing producers in the room
+          // ──────────────────────────────────────────────────
+          const existingProducers: ProducerInfo[] = await new Promise((resolve) => {
+            socket.emit("getProducers", resolve);
+          });
+
+          console.log(`[Mediasoup] Found ${existingProducers.length} existing producers`);
+
+          for (const producerInfo of existingProducers) {
+            await consumeProducer(socket, recvTransport, device, producerInfo);
+          }
+
+
 
         } catch (err) {
           console.error("[Mediasoup] Setup error:", err);
@@ -723,6 +717,13 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "ENDED" }),
       });
+      
+      // Notify other peers and stop local tracks
+      if (socketRef.current) {
+        socketRef.current.emit('end-session');
+      }
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      
       router.push("/dashboard");
     } catch (err) {
       console.error("Error ending session:", err);
@@ -748,12 +749,39 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
   };
 
   // ── Format seconds into MM:SS for the timer display ──────
-  function formatTime(ms: number) {
-    const totalSeconds = Math.floor(ms / 1000);
-    const m = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
-    const s = (totalSeconds % 60).toString().padStart(2, "0");
+  function formatTime(secs: number) {
+    const m = Math.floor(secs / 60).toString().padStart(2, "0");
+    const s = (secs % 60).toString().padStart(2, "0");
     return `${m}:${s}`;
   }
+
+  // ── Audio / Video toggle state ─────────────────────────────
+  const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
+
+  const toggleAudio = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(t => {
+        t.enabled = !t.enabled;
+      });
+      setIsAudioMuted(prev => !prev);
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(t => {
+        t.enabled = !t.enabled;
+      });
+      setIsVideoOff(prev => !prev);
+    }
+  };
+
+  const handleOpenInviteDialog = () => {
+    setIsInviteDialogOpen(true);
+  };
+
 
   // ── Status indicator config ───────────────────────────────
   const statusConfig = {
@@ -764,14 +792,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
   const currentStatus = statusConfig[connectionStatus];
 
   // ── Video grid layout ─────────────────────────────────────
-  // Total participants = 1 (you) + number of remote streams
   const totalParticipants = 1 + remoteStreams.size;
-  // Pick a grid layout based on how many people are in the room
-  const gridCols =
-    totalParticipants === 1 ? "grid-cols-1" :
-    totalParticipants === 2 ? "grid-cols-1 md:grid-cols-2" :
-    totalParticipants === 3 ? "grid-cols-1 md:grid-cols-3" :
-    "grid-cols-1 md:grid-cols-2"; // 4+ people: 2 columns, wrapping
 
   // ── Render ────────────────────────────────────────────────
   if (showDeviceCheck) {
@@ -788,76 +809,87 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
   }
 
   return (
-    <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)] text-[var(--text-primary)] p-6 md:p-8">
-      <div className="max-w-6xl mx-auto">
-        {/* Room Header */}
-        <div className="mb-6 flex flex-col md:flex-row md:items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold tracking-tight">{room.name}</h1>
-            {room.description && (
-              <p className="text-[var(--text-secondary)] mt-1">{room.description}</p>
-            )}
-            <div className="flex flex-wrap items-center gap-3 mt-4">
-              <StatusBadge status={currentRoomStatus as any} />
-              <span className="text-xs text-[var(--text-tertiary)] bg-[var(--bg-secondary)] px-3 py-1.5 rounded-full">
-                {isHost ? "Host" : "Participant"}
-              </span>
-              <span className="text-xs text-[var(--text-tertiary)] bg-[var(--bg-secondary)] px-3 py-1.5 rounded-full">
-                {totalParticipants} participant{totalParticipants !== 1 ? "s" : ""}
-              </span>
-              <span className="text-xs text-[var(--text-tertiary)] hidden sm:inline ml-1">
-                Hosted by {room.host.name || room.host.email}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${currentStatus.color.replace('bg-yellow-500', 'bg-yellow-500').replace('bg-green-500', 'bg-green-500').replace('bg-red-500', 'bg-red-500')}`} />
-            <span className="text-sm font-medium text-[var(--text-secondary)]">
-              {currentStatus.label.replace('Waiting for participants...', 'Waiting')}
-            </span>
-          </div>
+    <div className="h-screen flex flex-col bg-[#0E0E0E] text-white overflow-hidden">
+      {/* ── Top Bar ──────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-5 py-3 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <Link href="/dashboard" className="text-[var(--text-tertiary)] hover:text-white transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+            </svg>
+          </Link>
+          <span className="text-sm font-medium text-[var(--text-secondary)]">{room.name}</span>
         </div>
 
-        {/* Media Error */}
-        {mediaError && (
-          <div className="bg-red-500/10 border border-red-500/20 rounded-[var(--radius-sm)] p-4 mb-6">
-            <p className="text-sm text-red-400">{mediaError}</p>
-          </div>
-        )}
-
-        {/* ── Indicators ────────────────────────────── */}
-        <div className="flex flex-col gap-3 mb-6">
+        <div className="flex items-center gap-3">
+          {/* Recording timer in top bar */}
           {isRecording && (
-            <div className="flex items-center gap-3 bg-red-500/10 border border-red-500/20 rounded-[var(--radius-sm)] px-4 py-3 max-w-sm">
-              <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-              <span className="text-red-400 font-medium text-sm">Recording</span>
-              <span className="font-mono text-red-400/80 text-sm ml-auto">{formatTime(recordingTime)}</span>
+            <div className="flex items-center gap-2 bg-red-500/15 px-3 py-1.5 rounded-full">
+              <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              <span className="text-xs font-mono text-red-400">{formatTime(recordingTime)}</span>
             </div>
           )}
 
+          {/* Uploading indicator */}
           {isUploading && (
-            <div className="flex items-center gap-3 bg-blue-500/10 border border-blue-500/20 rounded-[var(--radius-sm)] px-4 py-3 max-w-sm">
-              <svg className="animate-spin h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24">
+            <div className="flex items-center gap-2 bg-blue-500/15 px-3 py-1.5 rounded-full">
+              <svg className="animate-spin h-3 w-3 text-blue-400" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
               </svg>
-              <span className="text-blue-400 font-medium text-sm">Uploading to S3...</span>
+              <span className="text-xs text-blue-400">Uploading...</span>
             </div>
           )}
 
+          {/* Upload complete */}
           {uploadComplete && (
-            <div className="flex items-center gap-3 bg-green-500/10 border border-green-500/20 rounded-[var(--radius-sm)] px-4 py-3 max-w-sm">
-              <span className="text-green-400 text-lg">✓</span>
-              <span className="text-green-400 font-medium text-sm">Upload complete</span>
+            <div className="flex items-center gap-2 bg-green-500/15 px-3 py-1.5 rounded-full">
+              <span className="text-xs text-green-400">✓ Uploaded</span>
+            </div>
+          )}
+
+          {/* Participant count */}
+          <div className="flex items-center gap-1.5 bg-[#1A1A1A] px-3 py-1.5 rounded-full">
+            <svg className="w-3.5 h-3.5 text-[var(--text-tertiary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0" />
+            </svg>
+            <span className="text-xs text-[var(--text-secondary)]">{totalParticipants}</span>
+          </div>
+
+          {/* Live indicator */}
+          {currentRoomStatus === "LIVE" && (
+            <div className="flex items-center gap-2 bg-[#1A1A1A] px-3 py-1.5 rounded-full">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span className="text-xs font-medium text-white">Live</span>
             </div>
           )}
         </div>
+      </div>
 
-        {/* ── Video Grid ─────────────────────────────────────── */}
-        <div className={`grid ${gridCols} gap-6 mb-8`}>
+      {/* ── Media Error ─────────────────────────────────────── */}
+      {mediaError && (
+        <div className="mx-5 mb-2 bg-red-500/10 rounded-lg p-3">
+          <p className="text-sm text-red-400">{mediaError}</p>
+        </div>
+      )}
+
+      {/* ── Video Grid Area ─────────────────────────────────── */}
+      <div className="flex-1 px-5 pb-2 min-h-0">
+        <div className={`h-full gap-3 ${
+          totalParticipants === 1
+            ? 'flex items-center justify-center'
+            : totalParticipants === 2
+              ? 'grid grid-cols-2'
+              : totalParticipants === 3
+                ? 'grid grid-cols-3'
+                : 'grid grid-cols-2 grid-rows-2'
+        }`}>
           {/* Local Video */}
-          <div className="relative aspect-video bg-[var(--bg-secondary)] rounded-[var(--radius)] shadow-[var(--shadow-subtle)] overflow-hidden">
+          <div className={`relative bg-[#1A1A1A] rounded-2xl overflow-hidden ${
+            totalParticipants === 1
+              ? 'w-full max-w-4xl aspect-video'
+              : 'w-full h-full'
+          }`}>
             <video
               ref={localVideoRef}
               autoPlay
@@ -865,69 +897,145 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
               playsInline
               className="w-full h-full object-cover transform -scale-x-100"
             />
-            <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md">
-              <span className="text-xs font-medium text-white">You {isHost ? "(Host)" : ""}</span>
+            {/* Name label */}
+            <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-md">
+              <span className="text-xs font-medium text-white">{currentUserName || "You"}</span>
             </div>
           </div>
 
           {/* Remote Videos */}
-          {remoteStreams.size === 0 && (
-            <div className="relative aspect-video bg-[var(--bg-secondary)] rounded-[var(--radius)] flex items-center justify-center shadow-[var(--shadow-subtle)]">
-              <div className="text-center">
-                <p className="text-[var(--text-tertiary)] text-sm mb-3">Waiting for participants</p>
-                {isHost && (
-                  <div className="flex items-center justify-center gap-2 mt-4">
-                    <code className="bg-[var(--bg-tertiary)] px-4 py-2 rounded-md text-sm">
-                      {`${nextAuthUrl}/room/${room.inviteCode}`}
-                    </code>
-                    <CopyButton text={`${nextAuthUrl}/room/${room.inviteCode}`} />
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
           {Array.from(remoteStreams.entries()).map(([socketId, stream]) => (
-            <div key={socketId} className="relative aspect-video bg-[var(--bg-secondary)] rounded-[var(--radius)] shadow-[var(--shadow-subtle)] overflow-hidden">
+            <div key={socketId} className="relative bg-[#1A1A1A] rounded-2xl overflow-hidden w-full h-full">
               <RemoteVideo stream={stream} socketId={socketId} />
-              <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md">
+              <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-md">
                 <span className="text-xs font-medium text-white">Participant</span>
               </div>
             </div>
           ))}
         </div>
-
-        {/* Action Buttons */}
-        <div className="flex items-center gap-4 mt-12 mb-6">
-          {isHost && connectionStatus === "connected" && !isRecording && !isUploading && (
-            <Button variant="primary" size="lg" onClick={handleHostStartRecording} className="bg-red-600 hover:bg-red-700 text-white border-transparent">
-              <span className="w-2.5 h-2.5 bg-white rounded-full inline-block mr-1" />
-              Start Recording
-            </Button>
-          )}
-
-          {isHost && isRecording && (
-            <Button variant="secondary" size="lg" onClick={handleHostStopRecording} className="border-red-500/50 hover:bg-red-500/10 text-red-400">
-              <span className="w-2.5 h-2.5 bg-red-400 rounded-sm inline-block mr-1" />
-              Stop Recording
-            </Button>
-          )}
-
-          {isHost && (
-            <Button variant="secondary" size="lg" onClick={handleEndSession}>
-              End Session
-            </Button>
-          )}
-
-          {/* Link to recordings */}
-          <div className="ml-auto">
-            <Link href={`/recordings/${room.id}`}>
-              <Button variant="ghost" size="md">
-                View Recordings →
-              </Button>
-            </Link>
-          </div>
-        </div>
       </div>
+
+      {/* ── Bottom Action Bar ───────────────────────────────── */}
+      <div className="flex items-center justify-center gap-2 px-5 py-4 flex-shrink-0">
+        {/* Record Button */}
+        {isHost && (
+          <button
+            onClick={isRecording ? handleHostStopRecording : handleHostStartRecording}
+            disabled={!isRecording && (connectionStatus !== "connected" || isUploading)}
+            className={`flex flex-col items-center gap-1.5 px-4 py-2 rounded-xl transition-all ${
+              isRecording
+                ? 'bg-red-600 hover:bg-red-700'
+                : 'hover:bg-[#1A1A1A]'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+              isRecording ? 'bg-white/20' : 'bg-red-600'
+            }`}>
+              {isRecording ? (
+                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="6" />
+                </svg>
+              )}
+            </div>
+            <span className="text-[11px] text-[var(--text-secondary)]">
+              {isRecording ? 'Stop' : 'Record'}
+            </span>
+          </button>
+        )}
+
+        {/* Audio Button */}
+        <button
+          onClick={toggleAudio}
+          className={`flex flex-col items-center gap-1.5 px-4 py-2 rounded-xl transition-all hover:bg-[#1A1A1A] ${
+            isAudioMuted ? 'opacity-50' : ''
+          }`}
+        >
+          <div className="w-9 h-9 rounded-lg bg-[#1A1A1A] flex items-center justify-center relative">
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+            </svg>
+            {isAudioMuted && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-[1.5px] h-7 bg-red-500 rotate-45 rounded-full" />
+              </div>
+            )}
+          </div>
+          <span className="text-[11px] text-[var(--text-secondary)]">Audio</span>
+        </button>
+
+        {/* Video Button */}
+        <button
+          onClick={toggleVideo}
+          className={`flex flex-col items-center gap-1.5 px-4 py-2 rounded-xl transition-all hover:bg-[#1A1A1A] ${
+            isVideoOff ? 'opacity-50' : ''
+          }`}
+        >
+          <div className="w-9 h-9 rounded-lg bg-[#1A1A1A] flex items-center justify-center relative">
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+            {isVideoOff && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-[1.5px] h-7 bg-red-500 rotate-45 rounded-full" />
+              </div>
+            )}
+          </div>
+          <span className="text-[11px] text-[var(--text-secondary)]">Video</span>
+        </button>
+
+        {/* Invite Button */}
+        <button
+          onClick={handleOpenInviteDialog}
+          className="flex flex-col items-center gap-1.5 px-4 py-2 rounded-xl transition-all hover:bg-[#1A1A1A] relative"
+        >
+          <div className="w-9 h-9 rounded-lg bg-[#1A1A1A] flex items-center justify-center">
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM3 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 019.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
+            </svg>
+          </div>
+          <span className="text-[11px] text-[var(--text-secondary)]">Invite</span>
+        </button>
+
+        {/* Separator */}
+        <div className="w-px h-10 bg-[#2A2A2A] mx-1" />
+
+        {/* End Session (Host) or Leave (Guest) */}
+        {isHost ? (
+          <button
+            onClick={handleEndSession}
+            className="flex flex-col items-center gap-1.5 px-4 py-2 rounded-xl transition-all hover:bg-red-500/10"
+          >
+            <div className="w-9 h-9 rounded-lg bg-red-600 flex items-center justify-center">
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 5.636a9 9 0 1012.728 0M12 3v9" />
+              </svg>
+            </div>
+            <span className="text-[11px] text-red-400">End</span>
+          </button>
+        ) : (
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="flex flex-col items-center gap-1.5 px-4 py-2 rounded-xl transition-all hover:bg-red-500/10"
+          >
+            <div className="w-9 h-9 rounded-lg bg-red-600 flex items-center justify-center">
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+              </svg>
+            </div>
+            <span className="text-[11px] text-red-400">Leave</span>
+          </button>
+        )}
+      </div>
+
+      <InviteDialog
+        isOpen={isInviteDialogOpen}
+        onClose={() => setIsInviteDialogOpen(false)}
+        inviteUrl={`${nextAuthUrl}/room/${room.inviteCode}`}
+      />
     </div>
   );
 }
