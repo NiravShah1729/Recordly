@@ -159,6 +159,9 @@ model Recording {
   startTime DateTime?                   // shared start timestamp for FFmpeg sync
   thumbnailUrl String?          // CDN URL to the thumbnail image
   
+  s3UploadId String?
+  uploadComplete Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -166,6 +169,8 @@ model Recording {
   room     Room?           @relation(fields: [roomId], references: [id])
   user     User           @relation(fields: [userId], references: [id])
   qualities VideoQuality[] // the different quality versions of this recording
+  uploadParts UploadPart[]
+  
 }
 
 // Each recording gets transcoded into multiple quality tiers
@@ -188,3 +193,25 @@ model VideoQuality {
 
   recording Recording @relation(fields: [recordingId], references: [id], onDelete: Cascade)
 }
+
+model UploadPart {
+  id          String   @id @default(cuid())
+  recordingId String
+  partNumber  Int
+  etag        String
+  createdAt   DateTime @default(now())
+
+  recording   Recording @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+
+  @@unique([recordingId, partNumber])
+}
+
+// model SyncMarker {
+//   id          String   @id @default(cuid())
+//   recordingId String
+//   timestamp   DateTime
+//   source      String
+//   createdAt   DateTime @default(now())
+
+//   recording   Recording @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+// }

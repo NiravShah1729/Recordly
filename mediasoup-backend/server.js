@@ -146,7 +146,7 @@ io.on('connection', (socket) => {
       }
 
       const transport = await room.router.createWebRtcTransport({
-        listenIps: [{ ip: '0.0.0.0', announcedIp: process.env.ANNOUNCED_IP || '10.1.75.133' }],
+        listenIps: [{ ip: '0.0.0.0', announcedIp: process.env.ANNOUNCED_IP || '192.168.1.18' }],
         enableUdp: true,
         enableTcp: true,
         preferUdp: true,
@@ -154,7 +154,7 @@ io.on('connection', (socket) => {
 
       // DEBUG: Log transport details
       console.log(`✅ Transport created for peer ${socket.id} sender:${sender}`);
-      console.log(`   announcedIp: ${process.env.ANNOUNCED_IP || '10.1.75.133'}`);
+      console.log(`   announcedIp: ${process.env.ANNOUNCED_IP || '192.168.1.18'}`);
       console.log(`   ICE candidates:`, JSON.stringify(transport.iceCandidates));
       console.log(`   tuple:`, JSON.stringify(transport.tuple));
 
@@ -361,5 +361,7 @@ io.on('connection', (socket) => {
 
 // ── Start ───────────────────────────────────────────
 createWorker().then(() => {
+  const announcedIp = process.env.ANNOUNCED_IP || '192.168.1.18';
   console.log('🚀 mediasoup server ready on port 3000');
+  console.log(`📡 ANNOUNCED_IP = ${announcedIp}`);
 });

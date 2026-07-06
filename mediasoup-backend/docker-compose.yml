@@ -10,7 +10,7 @@ services:
       - "20000-20050:20000-20050/tcp" # WebRTC fallback over TCP
     environment:
       - PORT=3000
-      - ANNOUNCED_IP=10.1.75.133
+      - ANNOUNCED_IP=192.168.1.18
     volumes:
       - .:/app
       - /app/node_modules # Prevents local node_modules from overwriting container build
