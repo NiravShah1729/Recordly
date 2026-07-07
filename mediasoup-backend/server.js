@@ -71,12 +71,13 @@ function getPeer(roomId, socketId) {
 }
 
 // Create a peer in a room
-function createPeer(roomId, socket) {
+function createPeer(roomId, socket, isHost = false) {
   const room = rooms.get(roomId);
   if (!room) return null;
 
   const peer = {
     socket,
+    isHost,
     producers: new Map(),   // producerId → Producer
     consumers: new Map(),   // consumerId → Consumer
     transports: new Map(),  // transportId → Transport
@@ -116,11 +117,11 @@ io.on('connection', (socket) => {
   let currentRoomId = null;
 
   // ── STEP 0: Join Room ─────────────────────────────
-  socket.on('join-room', async ({ roomId }, callback) => {
+  socket.on('join-room', async ({ roomId, isHost }, callback) => {
     try {
       currentRoomId = roomId;
       const room = await getOrCreateRoom(roomId);
-      createPeer(roomId, socket);
+      createPeer(roomId, socket, !!isHost);
       socket.join(roomId);
 
       // Tell the new peer what RTP capabilities the router supports
@@ -128,7 +129,7 @@ io.on('connection', (socket) => {
         rtpCapabilities: room.router.rtpCapabilities,
       });
 
-      console.log(`✅ Peer ${socket.id} joined room ${roomId}`);
+      console.log(`✅ Peer ${socket.id} joined room ${roomId} (host: ${!!isHost})`);
     } catch (error) {
       console.error('join-room error:', error);
       callback({ error: error.message });
@@ -317,26 +318,34 @@ io.on('connection', (socket) => {
   });
 
   // ── Recording Signals ─────────────────────────────
-  // The host emits start-recording → server generates a
-  // shared timestamp and broadcasts to everyone in the room.
-  // This keeps all participants' MediaRecorder start times
-  // aligned for FFmpeg sync later.
-  socket.on('start-recording', () => {
-    if (currentRoomId) {
-      const sharedStartTime = Date.now();
-      console.log(`🔴 start-recording in room ${currentRoomId} at ${sharedStartTime}`);
-      // Send to everyone ELSE in the room
-      socket.to(currentRoomId).emit('start-recording', { sharedStartTime });
-      // Also send back to the sender so they use the same timestamp
-      socket.emit('start-recording', { sharedStartTime });
+  // Only the host may trigger recording for the room.
+  // The server verifies the sender is the host before broadcasting.
+  socket.on('host-start-recording', ({ roomId }) => {
+    if (!currentRoomId) return;
+
+    const peer = getPeer(currentRoomId, socket.id);
+    if (!peer || !peer.isHost) {
+      console.warn(`⚠️ Non-host ${socket.id} tried to start recording in room ${currentRoomId}`);
+      return;
     }
+
+    console.log(`🔴 host-start-recording in room ${currentRoomId}`);
+    // Broadcast to ALL sockets in the room (including the host)
+    io.in(currentRoomId).emit('start-recording');
   });
 
-  socket.on('stop-recording', () => {
-    if (currentRoomId) {
-      console.log(`⏹ stop-recording in room ${currentRoomId}`);
-      socket.to(currentRoomId).emit('stop-recording');
+  socket.on('host-stop-recording', ({ roomId }) => {
+    if (!currentRoomId) return;
+
+    const peer = getPeer(currentRoomId, socket.id);
+    if (!peer || !peer.isHost) {
+      console.warn(`⚠️ Non-host ${socket.id} tried to stop recording in room ${currentRoomId}`);
+      return;
     }
+
+    console.log(`⏹ host-stop-recording in room ${currentRoomId}`);
+    // Broadcast to ALL sockets in the room (including the host)
+    io.in(currentRoomId).emit('stop-recording');
   });
 
   socket.on('end-session', () => {
