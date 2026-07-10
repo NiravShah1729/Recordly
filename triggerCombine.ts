@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import prisma from './lib/prisma';
-import { combineRecordings } from './lib/combineRecordings';
+import { enqueueCombineJob } from './lib/queues/combineQueue';
 
 async function main() {
   const roomId = process.argv[2];
@@ -22,9 +22,10 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Triggering combine for room ${roomId}...`);
-  await combineRecordings(roomId);
-  console.log("Finished running combine function.");
+  console.log(`Triggering combine for room ${roomId} via BullMQ...`);
+  await enqueueCombineJob(roomId);
+  console.log("Finished enqueuing combine job.");
 }
 
 main().catch(console.error).finally(() => prisma.$disconnect());
+

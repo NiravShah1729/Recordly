@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+worker/node_modules
+mediasoup-backend/node_modules
+scratch
+*.log
+app
+components
+public
+hooks
+types
+scripts

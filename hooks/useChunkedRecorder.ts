@@ -37,7 +37,10 @@ export function useChunkedRecorder(stream: MediaStream | null, roomId: string) {
         body: JSON.stringify({ recordingId: recId, partNumber: currentPartNumber }),
       });
       
-      if (!urlRes.ok) throw new Error('Failed to get part URL');
+      if (!urlRes.ok) {
+        const errText = await urlRes.text();
+        throw new Error(`Failed to get part URL: ${urlRes.status} ${errText}`);
+      }
       const { url } = await urlRes.json();
 
       // 2. Upload directly to S3
@@ -47,7 +50,10 @@ export function useChunkedRecorder(stream: MediaStream | null, roomId: string) {
         headers: { 'Content-Type': mime },
       });
 
-      if (!putRes.ok) throw new Error('Failed to upload part to S3');
+      if (!putRes.ok) {
+        const errText = await putRes.text();
+        throw new Error(`Failed to upload part to S3: ${putRes.status} ${errText}`);
+      }
       
       const etag = putRes.headers.get('ETag');
       if (!etag) throw new Error('No ETag returned from S3');
@@ -141,6 +147,21 @@ export function useChunkedRecorder(stream: MediaStream | null, roomId: string) {
         // Wait for all pending uploads to finish before setting isRecording to false
         await Promise.all(activeUploadsRef.current);
         
+        try {
+          const completeRes = await fetch(`/api/recordings/${newRecordingId}/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ expectedParts: partNumberRef.current }),
+          });
+
+          if (!completeRes.ok) {
+            const errText = await completeRes.text();
+            throw new Error(`Failed to complete recording: ${completeRes.status} ${errText}`);
+          }
+        } catch (error) {
+          console.error("Error finalizing recording:", error);
+        }
+
         setIsRecording(false);
       };
 

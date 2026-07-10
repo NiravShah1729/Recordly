@@ -17,7 +17,7 @@ app.prepare().then(async () => {
   if (dev) {
     try {
       console.log("> Generating self-signed certificate for local HTTPS...");
-      const pems = await generate([{ name: 'commonName', value: '192.168.1.18' }], { days: 365, keySize: 2048 });
+      const pems = await generate([{ name: 'commonName', value: '10.1.72.1' }], { days: 365, keySize: 2048 });
       serverOptions = {
         key: pems.private,
         cert: pems.cert

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getPresignedUrl } from "@/lib/s3";
+import { enqueueCombineJob } from "@/lib/queues/combineQueue";
 
 /**
  * GET /api/rooms/[id]/combined
@@ -44,3 +45,43 @@ export async function GET(
     combinedUrl: presignedUrl,
   });
 }
+
+/**
+ * POST /api/rooms/[id]/combined
+ *
+ * Triggers/Retries the recording combine process for the room.
+ */
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+
+  try {
+    const room = await prisma.room.findUnique({
+      where: { id },
+    });
+
+    if (!room) {
+      return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    }
+
+    // Update room combine status back to PENDING before enqueuing
+    await prisma.room.update({
+      where: { id },
+      data: { combineStatus: "PENDING" },
+    });
+
+    // Enqueue a new combine job using the BullMQ queue
+    await enqueueCombineJob(id);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Failed to trigger combine retry:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+

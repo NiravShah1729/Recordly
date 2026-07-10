@@ -71,38 +71,6 @@ function RecordPageInner() {
     }
   }
 
-  async function saveToServer() {
-    if (!downloadUrl) return;
-
-    const response = await fetch(downloadUrl);
-    const blob = await response.blob();
-
-    const formData = new FormData();
-    formData.append("file", blob, "recording.webm");
-    if (roomId) {
-      formData.append("roomId", roomId);
-    }
-
-    const res = await fetch("/api/recordings/upload", {
-      method: "POST",
-      body: formData,
-    });
-
-    const rawText = await res.text();
-    console.log("Server response:", rawText);
-
-    try {
-      const data = JSON.parse(rawText);
-      if (data.success) {
-        alert(`Saved! File: ${data.filename}`);
-      } else {
-        alert("Upload failed.");
-      }
-    } catch (err) {
-      alert("Server error — check console for details");
-    }
-  }
-
   return (
     <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)] text-[var(--text-primary)] flex flex-col items-center justify-center p-8">
       <h1 className="text-2xl font-semibold mb-6">Record</h1>
@@ -151,9 +119,6 @@ function RecordPageInner() {
                 Download
               </Button>
             </a>
-            <Button variant="primary" size="md" onClick={saveToServer}>
-              Save to Server
-            </Button>
           </div>
         </div>
       )}

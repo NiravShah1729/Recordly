@@ -7,11 +7,11 @@ import prisma from "@/lib/prisma";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { recordingId, uploadId, partNumber } = body;
+    const { recordingId, partNumber } = body;
 
-    if (!recordingId || !uploadId || typeof partNumber !== "number") {
+    if (!recordingId || typeof partNumber !== "number") {
       return NextResponse.json(
-        { error: "recordingId, uploadId, and partNumber are required" },
+        { error: "recordingId and partNumber are required" },
         { status: 400 }
       );
     }
@@ -28,6 +28,13 @@ export async function POST(req: Request) {
       );
     }
 
+    if (!recording.s3Key || !recording.s3UploadId) {
+      return NextResponse.json(
+        { error: "Recording does not have an active multipart upload" },
+        { status: 400 }
+      );
+    }
+
     if (!process.env.AWS_S3_BUCKET_NAME) {
       throw new Error("AWS_S3_BUCKET_NAME is not configured");
     }
@@ -37,7 +44,7 @@ export async function POST(req: Request) {
       Bucket: process.env.AWS_S3_BUCKET_NAME,
       Key: recording.s3Key,
       PartNumber: partNumber,
-      UploadId: uploadId,
+      UploadId: recording.s3UploadId,
     });
 
     // URL expires in 15 minutes (900 seconds)
@@ -45,7 +52,7 @@ export async function POST(req: Request) {
       expiresIn: 900,
     });
 
-    return NextResponse.json({ presignedUrl });
+    return NextResponse.json({ url: presignedUrl });
   } catch (error) {
     console.error("Error generating presigned URL for part:", error);
     return NextResponse.json(

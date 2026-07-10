@@ -8,6 +8,7 @@ import AutoRefresh from "../AutoRefresh";
 import RecordingCard from "@/components/ui/RecordingCard";
 import StatusBadge from "@/components/ui/StatusBadge";
 import DeleteRecordingButton from "./DeleteRecordingButton";
+import CombinedRecordingPlayer from "./CombinedRecordingPlayer";
 
 interface Props {
   params: Promise<{ roomId: string }>;
@@ -130,39 +131,12 @@ export default async function RoomRecordingsPage({ params }: Props) {
         </div>
 
         {/* Combined Recording */}
-        {room.combineStatus === "READY" && combinedUrl && (
-          <div className="mb-12">
-            <h2 className="text-lg font-medium text-[var(--text-primary)] mb-4">
-              Combined Recording
-            </h2>
-            <div className="bg-[var(--card-bg)] border border-[var(--border)] rounded-[var(--radius)] overflow-hidden">
-              <div className="p-1">
-                <video
-                  src={combinedUrl}
-                  controls
-                  className="w-full rounded-[var(--radius-sm)] bg-black max-h-[500px]"
-                />
-              </div>
-              <div className="p-4 flex items-center justify-between border-t border-[var(--border)] bg-[var(--bg-primary)]">
-                <div>
-                  <p className="font-medium text-[var(--text-primary)]">Full Session</p>
-                  <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
-                    Side-by-side view of all participants
-                  </p>
-                </div>
-                <a
-                  href={combinedUrl}
-                  download={`${room.name}-combined.mp4`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-white px-4 py-2 rounded-[var(--radius-sm)] text-sm font-medium transition-colors border border-[var(--border)]"
-                >
-                  Download
-                </a>
-              </div>
-            </div>
-          </div>
-        )}
+        <CombinedRecordingPlayer
+          roomId={room.id}
+          roomName={room.name}
+          initialStatus={room.combineStatus}
+          initialUrl={combinedUrl}
+        />
 
         {/* Individual Recordings */}
         <div>

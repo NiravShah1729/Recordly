@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
 import { CreateMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { s3Client } from "@/lib/s3";
 import prisma from "@/lib/prisma";
@@ -6,11 +8,17 @@ import prisma from "@/lib/prisma";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { roomId, participantId } = body;
+    const { roomId } = body;
 
-    if (!roomId || !participantId) {
+    const session = await getServerSession(authOptions);
+    if (!session || !session.user || !session.user.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const participantId = session.user.id;
+
+    if (!roomId) {
       return NextResponse.json(
-        { error: "roomId and participantId are required" },
+        { error: "roomId is required" },
         { status: 400 }
       );
     }

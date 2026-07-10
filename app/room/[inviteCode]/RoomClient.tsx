@@ -130,11 +130,16 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
     state: { isRecording, recordingId, uploadedParts }
   } = useChunkedRecorder(localStream, room.id);
 
-  // Ref to track latest isRecording for socket event handler without re-running effects
+  // Ref to track latest functions and state for socket event handler without re-running effects
   const isRecordingRef = useRef(false);
+  const startRecordingRef = useRef(startRecording);
+  const stopRecordingRef = useRef(stopRecording);
+
   useEffect(() => {
     isRecordingRef.current = isRecording;
-  }, [isRecording]);
+    startRecordingRef.current = startRecording;
+    stopRecordingRef.current = stopRecording;
+  }, [isRecording, startRecording, stopRecording]);
 
   // ── State ─────────────────────────────────────────────────────
   const router = useRouter();
@@ -492,12 +497,12 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
           console.log("[Recording] Ignoring start-recording: already recording");
           return;
         }
-        startRecording();
+        startRecordingRef.current();
       };
 
       const handleStopRecording = () => {
         console.log("[Recording] Received stop-recording event");
-        stopRecording();
+        stopRecordingRef.current();
       };
 
       socket.on("start-recording", handleStartRecording);
@@ -566,7 +571,8 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
 
   // ── Poll for combined recording status (UNCHANGED from P2P version) ─
   useEffect(() => {
-    // Only poll if there are recordings and status is not final
+    // Only poll if the room has ended, there are recordings, and status is not final
+    if (currentRoomStatus !== "ENDED") return;
     if (room.recordings.length === 0) return;
     if (combineStatus === "READY" || combineStatus === "FAILED") return;
 
@@ -619,11 +625,24 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
   };
 
   // ── HOST-ONLY button handlers ──
-  const handleHostStartRecording = () => {
+  const handleHostStartRecording = async () => {
     if (!localStreamRef.current) {
       alert("Cannot start recording — camera/mic not available.");
       return;
     }
+
+    try {
+      // The host + all connected remote peers
+      const expectedCount = remoteStreams.size + 1;
+      await fetch(`/api/rooms/${room.id}/set-recording-count`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedCount })
+      });
+    } catch (e) {
+      console.error("Failed to set recording count:", e);
+    }
+
     socketRef.current?.emit("host-start-recording", { roomId: room.id });
   };
 
