@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { ListPartsCommand, CompleteMultipartUploadCommand, Part } from "@aws-sdk/client-s3";
+import type { ListPartsCommandOutput } from "@aws-sdk/client-s3";
 import { s3Client } from "@/lib/s3";
 import prisma from "@/lib/prisma";
 import { enqueueCombineJob } from "@/lib/queues/combineQueue";
@@ -72,7 +73,7 @@ export async function POST(
 
     // Handle pagination for S3 ListParts (caps at 1000 parts)
     while (isTruncated) {
-      const listRes: any = await s3Client.send(
+      const listRes: ListPartsCommandOutput = await s3Client.send(
         new ListPartsCommand({
           Bucket: process.env.AWS_S3_BUCKET_NAME,
           Key: recording.s3Key,
@@ -169,10 +170,11 @@ export async function POST(
           },
         })
       );
-    } catch (s3Error: any) {
+    } catch (s3Error: unknown) {
       console.error("S3 CompleteMultipartUploadCommand failed:", s3Error);
+      const message = s3Error instanceof Error ? s3Error.message : "Failed to complete upload";
       return NextResponse.json(
-        { success: false, error: "S3_ERROR", message: s3Error.message || "Failed to complete upload" },
+        { success: false, error: "S3_ERROR", message },
         { status: 500 }
       );
     }
@@ -206,7 +208,7 @@ export async function POST(
           orderBy: { createdAt: "desc" }
         });
 
-        const latestRecordingsMap = new Map<string, any>();
+        const latestRecordingsMap = new Map<string, typeof allRoomRecordings[number]>();
         for (const rec of allRoomRecordings) {
           if (!latestRecordingsMap.has(rec.userId)) {
             latestRecordingsMap.set(rec.userId, rec);
@@ -236,10 +238,11 @@ export async function POST(
     }
 
     return NextResponse.json({ success: true, recording: updatedRecording });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error completing recording:", error);
+    const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json(
-      { success: false, error: "INTERNAL_SERVER_ERROR", message: error.message || "Internal server error" },
+      { success: false, error: "INTERNAL_SERVER_ERROR", message },
       { status: 500 }
     );
   }

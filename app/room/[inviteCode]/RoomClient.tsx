@@ -96,6 +96,51 @@ type ProducerInfo = {
   kind: string;
 };
 
+// Response types for mediasoup socket events
+interface SocketErrorResponse {
+  error: string;
+}
+
+interface TransportParams {
+  id: string;
+  iceParameters: mediasoupTypes.IceParameters;
+  iceCandidates: mediasoupTypes.IceCandidate[];
+  dtlsParameters: mediasoupTypes.DtlsParameters;
+  sender: boolean;
+}
+
+interface TransportResponse {
+  error?: string;
+  params: TransportParams;
+}
+
+interface ConsumeResponseParams {
+  id: string;
+  producerId: string;
+  kind: mediasoupTypes.MediaKind;
+  rtpParameters: mediasoupTypes.RtpParameters;
+}
+
+interface ConsumeResponse {
+  error?: string;
+  params: ConsumeResponseParams;
+}
+
+interface JoinRoomResponse {
+  error?: string;
+  rtpCapabilities: mediasoupTypes.RtpCapabilities;
+}
+
+interface ProduceResponse {
+  error?: string;
+  id: string;
+}
+
+interface ConnectResponse {
+  error?: string;
+  success?: boolean;
+}
+
 // ── Component ──────────────────────────────────────────────────
 export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName }: RoomClientProps) {
   // ── Video refs ────────────────────────────────────────────────
@@ -187,7 +232,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
       // We send our transport ID so the server knows which pipe to use,
       // the producer ID we want to consume, and our RTP capabilities
       // so the server can check codec compatibility.
-      const response: any = await new Promise((resolve) => {
+      const response: ConsumeResponse = await new Promise((resolve) => {
         socket.emit("consume", {
           transportId: recvTransport.id,
           producerId,
@@ -278,9 +323,10 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Media error:", err);
-        setMediaError(err.message || "Could not access camera/microphone. Please allow permissions.");
+        const message = err instanceof Error ? err.message : "Could not access camera/microphone. Please allow permissions.";
+        setMediaError(message);
         return;
       }
 
@@ -305,7 +351,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
           // The server creates a Router for the room (if it
           // doesn't exist) and sends back its RTP capabilities.
           // ──────────────────────────────────────────────────
-          const joinResponse: any = await new Promise((resolve) => {
+          const joinResponse: JoinRoomResponse = await new Promise((resolve) => {
             socket.emit("join-room", { roomId: room.id, isHost }, resolve);
           });
 
@@ -333,7 +379,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
           // to the server. We ask the server to create the
           // server-side transport, then create our local side.
           // ──────────────────────────────────────────────────
-          const sendTransportResponse: any = await new Promise((resolve) => {
+          const sendTransportResponse: TransportResponse = await new Promise((resolve) => {
             socket.emit("createWebRtcTransport", { sender: true }, resolve);
           });
 
@@ -351,7 +397,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
             socket.emit("transport-connect", {
               transportId: sendTransport.id,
               dtlsParameters,
-            }, (response: any) => {
+            }, (response: ConnectResponse) => {
               if (response.error) {
                 errback(new Error(response.error));
               } else {
@@ -367,7 +413,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
               transportId: sendTransport.id,
               kind,
               rtpParameters,
-            }, (response: any) => {
+            }, (response: ProduceResponse) => {
               if (response.error) {
                 errback(new Error(response.error));
               } else {
@@ -382,7 +428,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
           // This transport handles receiving OTHER peoples'
           // streams from the server.
           // ──────────────────────────────────────────────────
-          const recvTransportResponse: any = await new Promise((resolve) => {
+          const recvTransportResponse: TransportResponse = await new Promise((resolve) => {
             socket.emit("createWebRtcTransport", { sender: false }, resolve);
           });
 
@@ -399,7 +445,7 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
             socket.emit("transport-connect", {
               transportId: recvTransport.id,
               dtlsParameters,
-            }, (response: any) => {
+            }, (response: ConnectResponse) => {
               if (response.error) {
                 errback(new Error(response.error));
               } else {

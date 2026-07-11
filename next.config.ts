@@ -12,6 +12,6 @@ const nextConfig: NextConfig = {
       }
     ]
   }
-} as any; // Cast to any to avoid strict TS errors if types are not up-to-date
+};
 
 export default nextConfig;

@@ -42,8 +42,8 @@ export function InviteDialog({ isOpen, onClose, inviteUrl }: InviteDialogProps) 
       setEmailSuccess(true);
       setEmail("");
       setTimeout(() => setEmailSuccess(false), 3000);
-    } catch (err: any) {
-      setEmailError(err.message);
+    } catch (err: unknown) {
+      setEmailError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setIsSending(false);
     }

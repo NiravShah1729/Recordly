@@ -1,5 +1,7 @@
 "use client";
 
+import type { StatusType } from "./StatusBadge";
+
 import Card from "./Card";
 import StatusBadge from "./StatusBadge";
 import Button from "./Button";
@@ -10,7 +12,7 @@ interface RecordingCardProps {
     fileName: string;
     displayUrl?: string | null;
     thumbnailUrl?: string | null;
-    status: string;
+    status: StatusType;
     duration?: number | null;
     createdAt: string;
     userName?: string | null;
@@ -32,7 +34,7 @@ export default function RecordingCard({
     <Card className="flex flex-col gap-3">
       {/* Header row */}
       <div className="flex items-center justify-between">
-        <StatusBadge status={recording.status as any} />
+        <StatusBadge status={recording.status} />
         {recording.duration != null && recording.duration > 0 && (
           <span className="text-xs text-[var(--text-tertiary)] font-mono">
             {formatDuration(recording.duration)}

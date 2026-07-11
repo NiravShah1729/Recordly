@@ -24,7 +24,8 @@ export default function MicrophoneMeter({ stream, micEnabled }: MicrophoneMeterP
       return;
     }
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextClass = window.AudioContext || ((window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+    const audioContext = new AudioContextClass();
     audioContextRef.current = audioContext;
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;

@@ -1,6 +1,7 @@
 // src/lib/auth.ts
 
-import { NextAuthOptions } from "next-auth";
+import type { NextAuthOptions } from "next-auth";
+import type { Adapter } from "next-auth/adapters";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import EmailProvider from "next-auth/providers/email";
 import prisma from "@/lib/prisma";
@@ -10,7 +11,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 export const authOptions: NextAuthOptions = {
   // ── Adapter ───────────────────────────────────────────────
-  adapter: PrismaAdapter(prisma) as any,
+  adapter: PrismaAdapter(prisma) as unknown as Adapter,
 
   // ── Session Strategy ──────────────────────────────────────
   session: { strategy: "jwt" },
@@ -54,7 +55,7 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (session.user && token.userId) {
-        (session.user as any).id = token.userId as string;
+        session.user.id = token.userId as string;
       }
       return session;
     },

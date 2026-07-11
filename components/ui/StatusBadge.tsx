@@ -2,7 +2,7 @@ type RoomStatus = "WAITING" | "LIVE" | "ENDED";
 type RecordingStatus = "UPLOADING" | "PROCESSING" | "READY" | "FAILED";
 type CombineStatus = "PENDING" | "PROCESSING" | "READY" | "FAILED";
 
-type StatusType = RoomStatus | RecordingStatus | CombineStatus | "COMBINED";
+export type StatusType = RoomStatus | RecordingStatus | CombineStatus | "COMBINED";
 
 interface StatusBadgeProps {
   status: StatusType;

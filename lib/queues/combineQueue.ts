@@ -7,7 +7,7 @@ import { Queue } from 'bullmq';
 import { redis } from '@/lib/redis';
 
 export const combineQueue = new Queue('combine-queue', {
-  connection: redis as any,
+  connection: redis as unknown as import('bullmq').ConnectionOptions,
 });
 
 export async function enqueueCombineJob(roomId: string) {

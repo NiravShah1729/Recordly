@@ -36,7 +36,7 @@ export async function POST(
     await redis.set(`room:${id}:expectedRecordingCount`, expectedCount);
 
     return NextResponse.json({ success: true, expectedCount });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error setting recording count:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

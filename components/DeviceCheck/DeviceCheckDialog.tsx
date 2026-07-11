@@ -55,7 +55,7 @@ export default function DeviceCheckDialog({
         if (audioDevices.length > 0) setSelectedAudioId(audioDevices[0].deviceId);
         if (speakerDevices.length > 0) setSelectedSpeakerId(speakerDevices[0].deviceId);
 
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Media permission error:", err);
         setPermissionError(
           "Could not access camera or microphone. Please allow permissions in your browser settings and reload."
