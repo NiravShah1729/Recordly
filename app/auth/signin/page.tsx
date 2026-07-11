@@ -2,34 +2,33 @@
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 
 export default function SignInPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
+    setSuccess(false);
 
-    const result = await signIn("credentials", {
+    const result = await signIn("email", {
       email,
-      name,
       redirect: false,
+      callbackUrl: "/dashboard",
     });
 
     setLoading(false);
 
     if (result?.error) {
       setError("Something went wrong. Please try again.");
-    } else {
-      router.push("/dashboard");
+    } else if (result?.ok) {
+      setSuccess(true);
     }
   }
 
@@ -46,36 +45,42 @@ export default function SignInPage() {
         </div>
 
         <div className="w-full max-w-md bg-[var(--bg-secondary)] shadow-[var(--shadow-elevated)] rounded-[var(--radius-lg)] p-8 md:p-10">
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <Input
-              label="Your Name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Nirav"
-            />
+          {success ? (
+            <div className="text-center space-y-4">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 text-green-600 mb-2">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-medium text-[var(--text-primary)]">Check your email</h2>
+              <p className="text-[var(--text-secondary)]">
+                A magic link has been sent to <strong>{email}</strong>. Click the link to log in securely.
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <Input
+                label="Email Address"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                required
+                error={error || undefined}
+              />
 
-            <Input
-              label="Email Address"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              required
-              error={error || undefined}
-            />
-
-            <Button
-              type="submit"
-              variant="primary"
-              size="lg"
-              loading={loading}
-              disabled={!email}
-              className="w-full mt-2"
-            >
-              Continue with Email
-            </Button>
-          </form>
+              <Button
+                type="submit"
+                variant="primary"
+                size="lg"
+                loading={loading}
+                disabled={!email}
+                className="w-full mt-2"
+              >
+                Continue with Email
+              </Button>
+            </form>
+          )}
         </div>
       </div>
     </div>
