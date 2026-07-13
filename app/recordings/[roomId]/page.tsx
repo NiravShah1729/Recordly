@@ -52,7 +52,7 @@ export default async function RoomRecordingsPage({ params }: Props) {
   }
 
   const isHost = room.hostId === user.id;
-  const isParticipant = room.participants.some((p) => p.id === user.id);
+  const isParticipant = room.participants.some((p: { id: string }) => p.id === user.id);
 
   if (!isHost && !isParticipant) {
     return (
