@@ -5,7 +5,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(req: Request) {
   try {
-    const { email, inviteUrl } = await req.json();
+    const { email, inviteUrl, inviteeName, senderName, roomName } = await req.json();
 
     if (!email || !inviteUrl) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -18,48 +18,47 @@ export async function POST(req: Request) {
       );
     }
 
+    const inviteeNameClean = inviteeName ? inviteeName.trim() : "";
+    const senderNameClean = senderName ? senderName.trim() : "Someone";
+    const roomNameClean = roomName ? roomName.trim() : "a recording session";
+
+    let fromEmail = process.env.EMAIL_FROM || "Recordly <onboarding@resend.dev>";
+    if (process.env.EMAIL_FROM && !process.env.EMAIL_FROM.includes("<")) {
+      fromEmail = `Recordly <${process.env.EMAIL_FROM}>`;
+    }
+
     const { data, error } = await resend.emails.send({
-      from: "Recordly <onboarding@resend.dev>",
+      from: fromEmail,
       to: email,
-      subject: "You've been invited to a Recordly session!",
+      subject: `${senderNameClean} invited you to join "${roomNameClean}" on Recordly`,
       html: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-          <h2 style="color: #1a1a1a; font-size: 24px; font-weight: 600; margin-bottom: 16px;">You've been invited to join a recording session.</h2>
-          <p style="color: #4a4a4a; font-size: 16px; line-height: 1.6; margin-bottom: 24px;">
-            Hi there,
-            <br /><br />
-            You have been invited to join a professional recording session on Recordly. Please follow the instructions below to join.
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 24px; line-height: 1.6;">
+          <p style="font-size: 16px; margin-bottom: 20px;">Hi ${inviteeNameClean || 'there'},</p>
+          
+          <p style="font-size: 16px; margin-bottom: 20px;">
+            <strong>${senderNameClean}</strong> has invited you to join the recording room "${roomNameClean}" on Recordly.
           </p>
           
-          <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 28px;">
-            <h3 style="color: #1a1a1a; font-size: 16px; font-weight: 600; margin-bottom: 12px; margin-top: 0;">How to join:</h3>
-            <ol style="color: #4a4a4a; font-size: 14px; line-height: 1.6; margin-bottom: 0; padding-left: 20px;">
-              <li style="margin-bottom: 8px;">Click the <strong>Join Session</strong> button below.</li>
-              <li style="margin-bottom: 8px;">When prompted by your browser, <strong>allow access</strong> to your camera and microphone.</li>
-              <li style="margin-bottom: 8px;">You will enter the green room to check your video and audio.</li>
-              <li>Click <strong>Join Studio</strong> to enter the recording session.</li>
-            </ol>
-          </div>
-
-          <div style="text-align: center; margin-bottom: 28px;">
-            <a href="${inviteUrl}" style="display: inline-block; background-color: #7B5CFF; color: #ffffff; font-weight: 500; font-size: 16px; text-decoration: none; padding: 14px 28px; border-radius: 8px; transition: background-color 0.2s;">
+          <p style="font-size: 16px; margin-bottom: 20px;">Click the button below to join:</p>
+          
+          <p style="margin-bottom: 24px;">
+            <a href="${inviteUrl}" style="display: inline-block; background-color: #7B5CFF; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
               Join Session
             </a>
-          </div>
+          </p>
 
-          <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px;">
-            <p style="color: #6b7280; font-size: 14px; margin-bottom: 8px; margin-top: 0;">If the button doesn't work, copy and paste this link into your browser:</p>
-            <a href="${inviteUrl}" style="color: #7B5CFF; font-size: 14px; text-decoration: underline; word-break: break-all;">
-              ${inviteUrl}
-            </a>
-          </div>
+          <p style="font-size: 14px; color: #6b7280; margin-bottom: 20px; word-break: break-all;">
+            Or use this link:<br/>
+            <a href="${inviteUrl}" style="color: #7B5CFF;">${inviteUrl}</a>
+          </p>
 
-          <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid #e5e7eb; text-align: center;">
-            <p style="color: #9ca3af; font-size: 12px; margin: 0;">
-              Powered by Recordly<br />
-              High-quality local recording and real-time collaboration.
-            </p>
-          </div>
+          <p style="font-size: 14px; color: #6b7280; margin-bottom: 24px;">
+            If you weren't expecting this invitation, you can safely ignore this email.
+          </p>
+          
+          <p style="font-size: 16px; margin: 0;">
+            — The Recordly Team
+          </p>
         </div>
       `,
     });

@@ -330,8 +330,12 @@ io.on('connection', (socket) => {
     }
 
     console.log(`🔴 host-start-recording in room ${currentRoomId}`);
+    
+    // Generate a single shared timestamp for precise FFmpeg sync
+    const sharedStartTime = Date.now();
+    
     // Broadcast to ALL sockets in the room (including the host)
-    io.in(currentRoomId).emit('start-recording');
+    io.in(currentRoomId).emit('start-recording', { sharedStartTime });
   });
 
   socket.on('host-stop-recording', ({ roomId }) => {

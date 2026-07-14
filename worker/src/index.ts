@@ -16,6 +16,7 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import ffmpeg from 'fluent-ffmpeg';
 
+
 /**
  * Builds the FFmpeg filter_complex string dynamically based on the recordings' start times
  * and participant count. Uses xstack for an infinite grid and tpad/adelay for syncing.
@@ -235,16 +236,22 @@ const combineWorker = new Worker(
 
       const combinedUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${combinedS3Key}`;
 
-      // 7. Update Room status to READY
+      // 7. Update Room status to READY and recordings to COMPLETED
       console.log(`[Job ${job.id}] Marking room ${roomId} as READY.`);
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {
-          combineStatus: 'READY',
-          combinedS3Key,
-          combinedUrl, // Store public URL (if public) or CDN path
-        },
-      });
+      await prisma.$transaction([
+        prisma.room.update({
+          where: { id: roomId },
+          data: {
+            combineStatus: 'READY',
+            combinedS3Key,
+            combinedUrl,
+          },
+        }),
+        prisma.recording.updateMany({
+          where: { roomId: roomId },
+          data: { status: 'READY' },
+        })
+      ]);
 
     } catch (error) {
       console.error(`[Job ${job.id}] Combine job failed:`, error);

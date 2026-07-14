@@ -537,13 +537,13 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
       // RECORDING SOCKET EVENTS
       // ────────────────────────────────────────────────────────
       
-      const handleStartRecording = () => {
-        console.log("[Recording] Received start-recording event");
+      const handleStartRecording = ({ sharedStartTime }: { sharedStartTime?: number }) => {
+        console.log("[Recording] Received start-recording event with sharedStartTime:", sharedStartTime);
         if (isRecordingRef.current) {
           console.log("[Recording] Ignoring start-recording: already recording");
           return;
         }
-        startRecordingRef.current();
+        startRecordingRef.current(sharedStartTime);
       };
 
       const handleStopRecording = () => {
@@ -960,6 +960,8 @@ export default function RoomClient({ room, isHost, nextAuthUrl, currentUserName 
         isOpen={isInviteDialogOpen}
         onClose={() => setIsInviteDialogOpen(false)}
         inviteUrl={`${nextAuthUrl}/room/${room.inviteCode}`}
+        roomName={room.name}
+        senderName={currentUserName}
       />
     </div>
   );

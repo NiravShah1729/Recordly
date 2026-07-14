@@ -6,10 +6,13 @@ interface InviteDialogProps {
   isOpen: boolean;
   onClose: () => void;
   inviteUrl: string;
+  roomName?: string;
+  senderName?: string;
 }
 
-export function InviteDialog({ isOpen, onClose, inviteUrl }: InviteDialogProps) {
+export function InviteDialog({ isOpen, onClose, inviteUrl, roomName, senderName }: InviteDialogProps) {
   const [email, setEmail] = useState("");
+  const [inviteeName, setInviteeName] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState(false);
@@ -33,7 +36,7 @@ export function InviteDialog({ isOpen, onClose, inviteUrl }: InviteDialogProps) 
       const res = await fetch("/api/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, inviteUrl }),
+        body: JSON.stringify({ email, inviteUrl, inviteeName, senderName, roomName }),
       });
 
       const data = await res.json();
@@ -41,6 +44,7 @@ export function InviteDialog({ isOpen, onClose, inviteUrl }: InviteDialogProps) 
 
       setEmailSuccess(true);
       setEmail("");
+      setInviteeName("");
       setTimeout(() => setEmailSuccess(false), 3000);
     } catch (err: unknown) {
       setEmailError(err instanceof Error ? err.message : "An unexpected error occurred");
@@ -108,23 +112,44 @@ export function InviteDialog({ isOpen, onClose, inviteUrl }: InviteDialogProps) 
           </div>
           <p className="text-gray-400 text-xs mb-3">An email with instructions on how to join will be sent to the invitee.</p>
           
-          <div className="flex items-center gap-3">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="example@email.com"
-              className="flex-1 bg-[#0F0F0F] text-sm text-white px-4 py-3 rounded-xl border border-[#333] focus:outline-none focus:border-[#7B5CFF] transition-colors"
-            />
+          <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="text"
+                value={inviteeName}
+                onChange={(e) => setInviteeName(e.target.value)}
+                placeholder="Invitee's name (e.g. Sarah)"
+                className="flex-1 bg-[#0F0F0F] text-sm text-white px-4 py-3 rounded-xl border border-[#333] focus:outline-none focus:border-[#7B5CFF] transition-colors"
+              />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="example@email.com"
+                className="flex-1 bg-[#0F0F0F] text-sm text-white px-4 py-3 rounded-xl border border-[#333] focus:outline-none focus:border-[#7B5CFF] transition-colors"
+              />
+            </div>
             <button
               onClick={handleSendEmail}
               disabled={isSending || !email}
-              className="bg-[#7B5CFF] hover:bg-[#684be3] disabled:bg-[#4a3b8c] disabled:cursor-not-allowed transition-colors text-white text-sm font-medium px-5 py-3 rounded-xl whitespace-nowrap min-w-[110px]"
+              className="w-full bg-[#7B5CFF] hover:bg-[#684be3] disabled:bg-[#4a3b8c] disabled:cursor-not-allowed transition-colors text-white text-sm font-medium py-3 rounded-xl"
             >
               {isSending ? "Sending..." : emailSuccess ? "Sent!" : "Send invite"}
             </button>
           </div>
-          {emailError && <p className="text-red-500 text-xs mt-2">{emailError}</p>}
+          {emailError && (
+            <div className="mt-3 p-3 bg-red-950/30 border border-red-950/50 rounded-xl">
+              <p className="text-red-400 text-xs font-semibold mb-1">Failed to send email</p>
+              <p className="text-red-300 text-xs leading-normal">
+                {emailError}
+              </p>
+              {emailError.includes("testing emails") && (
+                <div className="mt-2 text-[11px] text-gray-400 border-t border-red-900/30 pt-2">
+                  <span className="font-semibold text-white">Workaround:</span> You can copy the join link above and share it manually (via WhatsApp, Slack, or email) to invite the user.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

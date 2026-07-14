@@ -78,7 +78,7 @@ export function useChunkedRecorder(stream: MediaStream | null, roomId: string) {
     }
   };
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (sharedStartTime?: number) => {
     if (!stream) {
       console.warn("No stream provided to startRecording");
       return;
@@ -95,7 +95,7 @@ export function useChunkedRecorder(stream: MediaStream | null, roomId: string) {
       const initRes = await fetch('/api/recordings/init-upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, filename }),
+        body: JSON.stringify({ roomId, filename, sharedStartTime }),
       });
       
       if (!initRes.ok) throw new Error('Failed to initialize upload');

@@ -8,7 +8,7 @@ import prisma from "@/lib/prisma";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { roomId } = body;
+    const { roomId, sharedStartTime } = body;
 
     const session = await getServerSession(authOptions);
     if (!session || !session.user || !session.user.id) {
@@ -48,12 +48,13 @@ export async function POST(req: Request) {
     const recording = await prisma.recording.create({
       data: {
         roomId,
-        userId: participantId, // mapping participantId to the userId field in Prisma
+        userId: participantId,
         fileName,
         s3Key,
         s3UploadId: uploadId,
         mimeType: "video/webm",
         status: "UPLOADING",
+        startTime: sharedStartTime ? new Date(sharedStartTime) : null,
       },
     });
 
