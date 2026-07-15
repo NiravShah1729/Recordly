@@ -1,7 +1,13 @@
 import Link from "next/link";
 import Button from "@/components/ui/Button";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
 
-export default function Home() {
+export default async function Home() {
+  const session = await getServerSession(authOptions);
+  const getStartedLink = session ? "/dashboard" : "/auth/signin";
+  const getStartedText = session ? "Go to Dashboard" : "Get Started — It's Free";
+
   return (
     <div className="min-h-[calc(100vh-57px)] bg-[var(--bg-primary)]">
       {/* ── Hero ──────────────────────────────────────────────── */}
@@ -17,9 +23,9 @@ export default function Home() {
           No downloads, no complicated setups — just open a link and hit record.
         </p>
         <div className="flex items-center justify-center gap-3">
-          <Link href="/auth/signin">
+          <Link href={getStartedLink}>
             <Button variant="primary" size="lg">
-              Get Started — It&apos;s Free
+              {getStartedText}
             </Button>
           </Link>
           <Link href="#how-it-works">
@@ -226,9 +232,9 @@ export default function Home() {
           <p className="text-sm sm:text-base text-[var(--text-secondary)] max-w-md mx-auto mb-8">
             Create your first room in under 30 seconds. Free to use, no credit card required.
           </p>
-          <Link href="/auth/signin">
+          <Link href={getStartedLink}>
             <Button variant="primary" size="lg">
-              Create Your Free Account
+              {getStartedText}
             </Button>
           </Link>
         </div>
