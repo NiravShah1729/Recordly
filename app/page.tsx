@@ -1,12 +1,11 @@
+"use client";
+
 import Link from "next/link";
 import Button from "@/components/ui/Button";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { useSession } from "next-auth/react";
 
-export const dynamic = "force-dynamic";
-
-export default async function Home() {
-  const session = await getServerSession(authOptions);
+export default function Home() {
+  const { data: session } = useSession();
   const getStartedLink = session ? "/dashboard" : "/auth/signin";
   const getStartedText = session ? "Go to Dashboard" : "Get Started — It's Free";
 
