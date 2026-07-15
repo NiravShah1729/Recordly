@@ -3,6 +3,8 @@ import Button from "@/components/ui/Button";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const session = await getServerSession(authOptions);
   const getStartedLink = session ? "/dashboard" : "/auth/signin";
