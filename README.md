@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎙️ Recordly
+#  Recordly
 
 **Browser-native recording studio — real-time video calls with per-participant local recording and automated server-side post-production.**
 
@@ -53,8 +53,8 @@ The system is composed of **three independently deployable services**:
 │                              BROWSER (per participant)                      │
 │                                                                             │
 │  ┌──────────────────┐    ┌──────────────────┐    ┌───────────────────────┐  │
-│  │  getUserMedia()   │    │  mediasoup-client │    │    MediaRecorder      │  │
-│  │  (camera + mic)   │───▶│  (live SFU call)  │    │  (local raw capture)  │  │
+│  │  getUserMedia()  │    │  mediasoup-client│    │    MediaRecorder      │  │
+│  │  (camera + mic)  │───>|  (live SFU call) │    │  (local raw capture)  │  │
 │  └──────────────────┘    └────────┬─────────┘    └──────────┬────────────┘  │
 │                                   │                         │               │
 │                            WebRTC (RTP)           Chunked upload (HTTPS)    │
@@ -62,24 +62,24 @@ The system is composed of **three independently deployable services**:
 └───────────────────────────────────┼─────────────────────────┼───────────────┘
                                     │                         │
                   ┌─────────────────▼──────────┐              │
-                  │   SERVICE 2: mediasoup SFU  │              │
-                  │   (Docker on EC2/Railway)   │              │
-                  │                             │              │
-                  │   • Socket.io signaling     │              │
-                  │   • WebRTC transport mgmt   │              │
-                  │   • Producer/Consumer relay  │              │
-                  │   • UDP ports 20000–20050   │              │
+                  │   SERVICE 2: mediasoup SFU │              │
+                  │   (Docker on EC2/Railway)  │              │
+                  │                            │              │
+                  │   • Socket.io signaling    │              │
+                  │   • WebRTC transport mgmt  │              │
+                  │   • Producer/Consumer relay│              │
+                  │   • UDP ports 20000–20050  │              │
                   └────────────────────────────┘              │
                                                               │
-                  ┌───────────────────────────────────────────▼────────────┐
-                  │           SERVICE 1: Next.js App (server.js)           │
-                  │                                                        │
-                  │   • Custom HTTPS + Socket.io server                    │
-                  │   • App Router pages (dashboard, rooms, recordings)    │
-                  │   • REST API (room CRUD, upload init, presigned URLs)  │
-                  │   • NextAuth.js (email magic links via Resend)         │
-                  │   • BullMQ producer (enqueues combine jobs)            │
-                  │                                                        │
+                  ┌───────────────────────────────────────────▼───────────
+                  │           SERVICE 1: Next.js App (server.js)          │
+                  │                                                       │
+                  │   • Custom HTTPS + Socket.io server                   │
+                  │   • App Router pages (dashboard, rooms, recordings)   │
+                  │   • REST API (room CRUD, upload init, presigned URLs) │
+                  │   • NextAuth.js (email magic links via Resend)        │
+                  │   • BullMQ producer (enqueues combine jobs)           │
+                  │                                                       │
                   │           ┌──────────┐    ┌──────────────┐            │
                   │           │ Prisma 7 │    │   AWS S3     │            │
                   │           │ (PG/Neon)│    │  raw/        │            │
@@ -90,15 +90,15 @@ The system is composed of **three independently deployable services**:
                               BullMQ job via Redis (Upstash / local)
                                                 │
                   ┌─────────────────────────────▼──────────────────────────┐
-                  │           SERVICE 3: FFmpeg Worker (Docker)             │
+                  │           SERVICE 3: FFmpeg Worker (Docker)            │
                   │                                                        │
                   │   • BullMQ consumer on "combine-queue"                 │
-                  │   • Downloads participant recordings from S3            │
+                  │   • Downloads participant recordings from S3           │
                   │   • Builds dynamic xstack filter (N-way grid)          │
                   │   • Offset-aware sync via tpad + adelay                │
                   │   • Uploads combined MP4 back to S3                    │
                   │   • Concurrency: 2 (tunable per instance size)         │
-                  │   • Graceful SIGTERM handling for zero-downtime deploys │
+                  │   • Graceful SIGTERM handling for zero-downtime deploys│
                   └────────────────────────────────────────────────────────┘
 ```
 
